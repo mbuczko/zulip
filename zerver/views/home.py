@@ -215,13 +215,6 @@ def home_real(request: HttpRequest) -> HttpResponse:
 
     narrow, narrow_stream, narrow_topic_name = detect_narrowed_window(request, user_profile)
 
-    if user_profile is not None:
-        needs_tutorial = user_profile.tutorial_status == UserProfile.TUTORIAL_WAITING
-
-    else:
-        # The current tutorial doesn't super make sense for logged-out users.
-        needs_tutorial = False
-
     queue_id, page_params = build_page_params_for_home_page_load(
         request=request,
         user_profile=user_profile,
@@ -230,7 +223,6 @@ def home_real(request: HttpRequest) -> HttpResponse:
         narrow=narrow,
         narrow_stream=narrow_stream,
         narrow_topic_name=narrow_topic_name,
-        needs_tutorial=needs_tutorial,
     )
 
     log_data = RequestNotes.get_notes(request).log_data
@@ -249,6 +241,10 @@ def home_real(request: HttpRequest) -> HttpResponse:
             "page_params": page_params,
             "csp_nonce": csp_nonce,
             "color_scheme": user_permission_info.color_scheme,
+            "enable_gravatar": settings.ENABLE_GRAVATAR,
+            "s3_avatar_public_url_prefix": settings.S3_AVATAR_PUBLIC_URL_PREFIX
+            if settings.LOCAL_UPLOADS_DIR is None
+            else "",
         },
     )
     patch_cache_control(response, no_cache=True, no_store=True, must_revalidate=True)

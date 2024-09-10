@@ -42,6 +42,7 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.models.bots import get_bot_services
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_fake_email_domain
 from zerver.models.users import (
     active_non_guest_user_ids,
@@ -50,7 +51,7 @@ from zerver.models.users import (
     get_bot_dicts_in_realm,
     get_user_profile_by_id,
 )
-from zerver.tornado.django_api import send_event, send_event_on_commit
+from zerver.tornado.django_api import send_event_on_commit
 
 if settings.BILLING_ENABLED:
     from corporate.lib.stripe import RealmBillingSession
@@ -62,7 +63,7 @@ def do_delete_user(user_profile: UserProfile, *, acting_user: UserProfile | None
 
     do_deactivate_user(user_profile, acting_user=acting_user)
 
-    subscribed_huddle_recipient_ids = set(
+    to_resubscribe_recipient_ids = set(
         Subscription.objects.filter(
             user_profile=user_profile, recipient__type=Recipient.DIRECT_MESSAGE_GROUP
         ).values_list("recipient_id", flat=True)
@@ -97,7 +98,7 @@ def do_delete_user(user_profile: UserProfile, *, acting_user: UserProfile | None
                 recipient=recipient,
                 is_user_active=replacement_user.is_active,
             )
-            for recipient in Recipient.objects.filter(id__in=subscribed_huddle_recipient_ids)
+            for recipient in Recipient.objects.filter(id__in=to_resubscribe_recipient_ids)
         ]
         Subscription.objects.bulk_create(subs_to_recreate)
 
@@ -105,7 +106,7 @@ def do_delete_user(user_profile: UserProfile, *, acting_user: UserProfile | None
             realm=replacement_user.realm,
             modified_user=replacement_user,
             acting_user=acting_user,
-            event_type=RealmAuditLog.USER_DELETED,
+            event_type=AuditLogEventType.USER_DELETED,
             event_time=timezone_now(),
         )
 
@@ -236,7 +237,7 @@ def do_delete_user_preserving_messages(user_profile: UserProfile) -> None:
             realm=replacement_user.realm,
             modified_user=replacement_user,
             acting_user=None,
-            event_type=RealmAuditLog.USER_DELETED_PRESERVING_MESSAGES,
+            event_type=AuditLogEventType.USER_DELETED_PRESERVING_MESSAGES,
             event_time=timezone_now(),
         )
 
@@ -271,8 +272,8 @@ def send_events_for_user_deactivation(user_profile: UserProfile) -> None:
 
     # This code path is parallel to
     # get_subscribers_of_target_user_subscriptions, but can't reuse it
-    # because we need to process stream and huddle subscriptions
-    # separately.
+    # because we need to process stream and direct_message_group
+    # subscriptions separately.
     deactivated_user_subs = Subscription.objects.filter(
         user_profile=user_profile,
         recipient__type__in=[Recipient.STREAM, Recipient.DIRECT_MESSAGE_GROUP],
@@ -285,18 +286,18 @@ def send_events_for_user_deactivation(user_profile: UserProfile) -> None:
         active=True,
     ).values_list("recipient__type", "user_profile_id")
 
-    subscribers_in_deactivated_user_streams = set()
-    subscribers_in_deactivated_user_huddles = set()
+    peer_stream_subscribers = set()
+    peer_direct_message_group_subscribers = set()
     for recipient_type, user_id in subscribers_in_deactivated_user_subs:
         if recipient_type == Recipient.DIRECT_MESSAGE_GROUP:
-            subscribers_in_deactivated_user_huddles.add(user_id)
+            peer_direct_message_group_subscribers.add(user_id)
         else:
-            subscribers_in_deactivated_user_streams.add(user_id)
+            peer_stream_subscribers.add(user_id)
 
     users_with_access_to_deactivated_user = (
         set(non_guest_user_ids)
         | users_involved_in_dms_dict[user_profile.id]
-        | subscribers_in_deactivated_user_huddles
+        | peer_direct_message_group_subscribers
     )
     if users_with_access_to_deactivated_user:
         send_event_on_commit(
@@ -304,7 +305,7 @@ def send_events_for_user_deactivation(user_profile: UserProfile) -> None:
         )
 
     users_losing_access_to_deactivated_user = (
-        subscribers_in_deactivated_user_streams - users_with_access_to_deactivated_user
+        peer_stream_subscribers - users_with_access_to_deactivated_user
     )
     if users_losing_access_to_deactivated_user:
         event_remove_user = dict(
@@ -352,7 +353,7 @@ def do_deactivate_user(
             realm=user_profile.realm,
             modified_user=user_profile,
             acting_user=acting_user,
-            event_type=RealmAuditLog.USER_DEACTIVATED,
+            event_type=AuditLogEventType.USER_DEACTIVATED,
             event_time=event_time,
             extra_data={
                 RealmAuditLog.ROLE_COUNT: realm_user_count_by_role(user_profile.realm),
@@ -463,7 +464,7 @@ def do_change_user_role(
         realm=user_profile.realm,
         modified_user=user_profile,
         acting_user=acting_user,
-        event_type=RealmAuditLog.USER_ROLE_CHANGED,
+        event_type=AuditLogEventType.USER_ROLE_CHANGED,
         event_time=timezone_now(),
         extra_data={
             RealmAuditLog.OLD_VALUE: old_value,
@@ -472,6 +473,10 @@ def do_change_user_role(
         },
     )
     maybe_enqueue_audit_log_upload(user_profile.realm)
+    if settings.BILLING_ENABLED and UserProfile.ROLE_GUEST in [old_value, value]:
+        billing_session = RealmBillingSession(user=user_profile, realm=user_profile.realm)
+        billing_session.update_license_ledger_if_needed(timezone_now())
+
     event = dict(
         type="realm_user", op="update", person=dict(user_id=user_profile.id, role=user_profile.role)
     )
@@ -490,7 +495,7 @@ def do_change_user_role(
                 realm=user_profile.realm,
                 modified_user=user_profile,
                 modified_user_group=old_system_group,
-                event_type=RealmAuditLog.USER_GROUP_DIRECT_USER_MEMBERSHIP_REMOVED,
+                event_type=AuditLogEventType.USER_GROUP_DIRECT_USER_MEMBERSHIP_REMOVED,
                 event_time=now,
                 acting_user=acting_user,
             ),
@@ -498,7 +503,7 @@ def do_change_user_role(
                 realm=user_profile.realm,
                 modified_user=user_profile,
                 modified_user_group=system_group,
-                event_type=RealmAuditLog.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
+                event_type=AuditLogEventType.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
                 event_time=now,
                 acting_user=acting_user,
             ),
@@ -517,13 +522,14 @@ def do_change_user_role(
     send_stream_events_for_role_update(user_profile, previously_accessible_streams)
 
 
+@transaction.atomic(savepoint=False)
 def do_change_is_billing_admin(user_profile: UserProfile, value: bool) -> None:
     user_profile.is_billing_admin = value
     user_profile.save(update_fields=["is_billing_admin"])
     event = dict(
         type="realm_user", op="update", person=dict(user_id=user_profile.id, is_billing_admin=value)
     )
-    send_event(user_profile.realm, event, get_user_ids_who_can_access_user(user_profile))
+    send_event_on_commit(user_profile.realm, event, get_user_ids_who_can_access_user(user_profile))
 
 
 def do_change_can_forge_sender(user_profile: UserProfile, value: bool) -> None:
@@ -536,6 +542,7 @@ def do_change_can_create_users(user_profile: UserProfile, value: bool) -> None:
     user_profile.save(update_fields=["can_create_users"])
 
 
+@transaction.atomic(durable=True)
 def do_update_outgoing_webhook_service(
     bot_profile: UserProfile, service_interface: int, service_payload_url: str
 ) -> None:
@@ -545,7 +552,7 @@ def do_update_outgoing_webhook_service(
     service.base_url = service_payload_url
     service.interface = service_interface
     service.save()
-    send_event(
+    send_event_on_commit(
         bot_profile.realm,
         dict(
             type="realm_bot",
@@ -563,11 +570,12 @@ def do_update_outgoing_webhook_service(
     )
 
 
+@transaction.atomic(durable=True)
 def do_update_bot_config_data(bot_profile: UserProfile, config_data: dict[str, str]) -> None:
     for key, value in config_data.items():
         set_bot_config(bot_profile, key, value)
     updated_config_data = get_bot_config(bot_profile)
-    send_event(
+    send_event_on_commit(
         bot_profile.realm,
         dict(
             type="realm_bot",

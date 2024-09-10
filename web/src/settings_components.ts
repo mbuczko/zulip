@@ -210,7 +210,6 @@ export function get_subsection_property_elements($subsection: JQuery): HTMLEleme
 type simple_dropdown_realm_settings = Pick<
     typeof realm,
     | "realm_create_private_stream_policy"
-    | "realm_create_web_public_stream_policy"
     | "realm_invite_to_stream_policy"
     | "realm_user_group_edit_policy"
     | "realm_add_custom_emoji_policy"
@@ -391,7 +390,7 @@ function read_select_field_data_from_form(
         }
     }
     $profile_field_form.find("div.choice-row").each(function (this: HTMLElement) {
-        const text = $(this).find("input")[0]!.value;
+        const text = util.the($(this).find("input")).value;
         if (text) {
             let value = old_option_value_map.get(text);
             if (value !== undefined) {
@@ -466,6 +465,7 @@ function get_field_data_input_value($input_elem: JQuery): string | undefined {
     return JSON.stringify(proposed_value);
 }
 
+export let new_group_can_manage_group_widget: DropdownWidget | null = null;
 export let new_group_can_mention_group_widget: DropdownWidget | null = null;
 
 const dropdown_widget_map = new Map<string, DropdownWidget | null>([
@@ -476,9 +476,12 @@ const dropdown_widget_map = new Map<string, DropdownWidget | null>([
     ["realm_create_multiuse_invite_group", null],
     ["can_remove_subscribers_group", null],
     ["realm_can_access_all_users_group", null],
+    ["can_manage_group", null],
     ["can_mention_group", null],
     ["realm_can_create_public_channel_group", null],
     ["realm_can_create_private_channel_group", null],
+    ["realm_can_create_web_public_channel_group", null],
+    ["realm_can_delete_any_message_group", null],
     ["realm_direct_message_initiator_group", null],
     ["realm_direct_message_permission_group", null],
 ]);
@@ -507,6 +510,10 @@ export function set_dropdown_setting_widget(property_name: string, widget: Dropd
 
 export function set_new_group_can_mention_group_widget(widget: DropdownWidget): void {
     new_group_can_mention_group_widget = widget;
+}
+
+export function set_new_group_can_manage_group_widget(widget: DropdownWidget): void {
+    new_group_can_manage_group_widget = widget;
 }
 
 export function set_dropdown_list_widget_setting_value(
@@ -722,7 +729,7 @@ export function get_auth_method_list_data(): Record<string, boolean> {
     for (const method_row of $auth_method_rows) {
         const method = $(method_row).attr("data-method");
         assert(method !== undefined);
-        new_auth_methods[method] = $(method_row).find<HTMLInputElement>("input")[0]!.checked;
+        new_auth_methods[method] = util.the($(method_row).find<HTMLInputElement>("input")).checked;
     }
 
     return new_auth_methods;
@@ -793,6 +800,8 @@ export function check_realm_settings_property_changed(elem: HTMLElement): boolea
         case "realm_can_access_all_users_group":
         case "realm_can_create_public_channel_group":
         case "realm_can_create_private_channel_group":
+        case "realm_can_create_web_public_channel_group":
+        case "realm_can_delete_any_message_group":
         case "realm_direct_message_initiator_group":
         case "realm_direct_message_permission_group":
             proposed_val = get_dropdown_list_widget_setting_value($elem);
@@ -865,6 +874,7 @@ export function check_group_property_changed(elem: HTMLElement, group: UserGroup
     const current_val = get_group_property_value(property_name, group);
     let proposed_val;
     switch (property_name) {
+        case "can_manage_group":
         case "can_mention_group":
             proposed_val = get_dropdown_list_widget_setting_value($elem);
             break;
@@ -988,6 +998,8 @@ export function populate_data_for_realm_settings_request(
                 const realm_group_settings_using_new_api_format = new Set([
                     "can_create_private_channel_group",
                     "can_create_public_channel_group",
+                    "can_create_web_public_channel_group",
+                    "can_delete_any_message_group",
                     "direct_message_initiator_group",
                     "direct_message_permission_group",
                 ]);
@@ -1049,10 +1061,12 @@ export function populate_data_for_group_request(
         if (check_group_property_changed(input_elem, group)) {
             const input_value = get_input_element_value(input_elem);
             if (input_value !== undefined && input_value !== null) {
-                const property_name = extract_property_name($input_elem);
+                // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+                const property_name = extract_property_name($input_elem) as keyof UserGroup;
+                const old_value = get_group_property_value(property_name, group);
                 data[property_name] = JSON.stringify({
                     new: input_value,
-                    old: group.can_mention_group,
+                    old: old_value,
                 });
             }
         }
@@ -1291,7 +1305,7 @@ function enable_or_disable_save_button($subsection_elem: JQuery): void {
         const $button_wrapper = $subsection_elem.find<tippy.PopperElement>(
             ".subsection-changes-save",
         );
-        const tippy_instance = $button_wrapper[0]!._tippy;
+        const tippy_instance = util.the($button_wrapper)._tippy;
         if (disable_save_btn) {
             // avoid duplication of tippy
             if (!tippy_instance) {
@@ -1329,5 +1343,5 @@ export function initialize_disable_btn_hint_popover(
     if (hint_text !== undefined) {
         tippy_opts.content = hint_text;
     }
-    tippy.default($btn_wrapper[0]!, tippy_opts);
+    tippy.default(util.the($btn_wrapper), tippy_opts);
 }

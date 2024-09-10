@@ -505,6 +505,7 @@ function test_discard_changes_button(discard_changes) {
 }
 
 test("set_up", ({override, override_rewire}) => {
+    override_rewire(settings_org, "check_disable_message_delete_limit_setting_dropdown", noop);
     realm.realm_available_video_chat_providers = {
         jitsi_meet: {
             id: 1,
@@ -641,8 +642,8 @@ test("set_up", ({override, override_rewire}) => {
     $("#allowed_domains_label").set_parent($.create("<stub-allowed-domain-label-parent>"));
     const $waiting_period_parent_elem = $.create("waiting-period-parent-stub");
     $("#id_realm_waiting_period_threshold").set_parent($waiting_period_parent_elem);
-    $("#id_realm_create_web_public_stream_policy").set_parent(
-        $.create("<stub-create-web-public-stream-policy-parent>"),
+    $("#id_realm_can_create_web_public_channel_group").set_parent(
+        $.create("<stub-can-create-web-public-channel-group-parent>"),
     );
 
     override_rewire(settings_components, "get_input_element_value", (elem) => {

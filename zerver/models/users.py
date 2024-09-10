@@ -1,6 +1,3 @@
-# https://github.com/typeddjango/django-stubs/issues/1698
-# mypy: disable-error-code="explicit-override"
-
 from email.headerregistry import Address
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
@@ -594,22 +591,6 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     # us, pre-thumbnailing.
     avatar_hash = models.CharField(null=True, max_length=64)
 
-    # TODO: TUTORIAL_STATUS was originally an optimization designed to
-    # allow us to skip querying the OnboardingStep table when loading
-    # /. This optimization is no longer effective, so it's possible we
-    # should delete it.
-    TUTORIAL_WAITING = "W"
-    TUTORIAL_STARTED = "S"
-    TUTORIAL_FINISHED = "F"
-    TUTORIAL_STATES = (
-        (TUTORIAL_WAITING, "Waiting"),
-        (TUTORIAL_STARTED, "Started"),
-        (TUTORIAL_FINISHED, "Finished"),
-    )
-    tutorial_status = models.CharField(
-        default=TUTORIAL_WAITING, choices=TUTORIAL_STATES, max_length=1
-    )
-
     zoom_token = models.JSONField(default=None, null=True)
 
     objects = UserManager()
@@ -621,6 +602,17 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
         ROLE_MEMBER: gettext_lazy("Member"),
         ROLE_GUEST: gettext_lazy("Guest"),
     }
+
+    # Mapping of role ids to simple string identifiers for the roles,
+    # to be used in API contexts such as SCIM provisioning.
+    ROLE_ID_TO_API_NAME = {
+        ROLE_REALM_OWNER: "owner",
+        ROLE_REALM_ADMINISTRATOR: "administrator",
+        ROLE_MODERATOR: "moderator",
+        ROLE_MEMBER: "member",
+        ROLE_GUEST: "guest",
+    }
+    ROLE_API_NAME_TO_ID = {v: k for k, v in ROLE_ID_TO_API_NAME.items()}
 
     class Meta:
         indexes = [
@@ -783,8 +775,9 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
             "add_custom_emoji_policy",
             "can_create_private_channel_group",
             "can_create_public_channel_group",
+            "can_create_web_public_channel_group",
+            "can_delete_any_message_group",
             "create_multiuse_invite_group",
-            "create_web_public_stream_policy",
             "delete_own_message_policy",
             "direct_message_initiator_group",
             "direct_message_permission_group",
@@ -848,7 +841,7 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     def can_create_web_public_streams(self) -> bool:
         if not self.realm.web_public_streams_enabled():
             return False
-        return self.has_permission("create_web_public_stream_policy")
+        return self.has_permission("can_create_web_public_channel_group")
 
     def can_subscribe_other_users(self) -> bool:
         return self.has_permission("invite_to_stream_policy")
@@ -862,7 +855,10 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
     def can_move_messages_between_streams(self) -> bool:
         return self.has_permission("move_messages_between_streams_policy")
 
-    def can_edit_user_groups(self) -> bool:
+    def can_create_user_groups(self) -> bool:
+        return self.has_permission("user_group_edit_policy")
+
+    def can_edit_all_user_groups(self) -> bool:
         return self.has_permission("user_group_edit_policy")
 
     def can_move_messages_to_another_topic(self) -> bool:
@@ -870,6 +866,9 @@ class UserProfile(AbstractBaseUser, PermissionsMixin, UserBaseSettings):
 
     def can_add_custom_emoji(self) -> bool:
         return self.has_permission("add_custom_emoji_policy")
+
+    def can_delete_any_message(self) -> bool:
+        return self.has_permission("can_delete_any_message_group")
 
     def can_delete_own_message(self) -> bool:
         return self.has_permission("delete_own_message_policy")
@@ -1129,12 +1128,14 @@ def bot_owner_user_ids(user_profile: UserProfile) -> set[int]:
         user_profile.default_events_register_stream
         and user_profile.default_events_register_stream.invite_only
     )
-    assert user_profile.bot_owner_id is not None
     if is_private_bot:
-        return {user_profile.bot_owner_id}
+        if user_profile.bot_owner_id is not None:
+            return {user_profile.bot_owner_id}
+        return set()
     else:
         users = {user.id for user in user_profile.realm.get_human_admin_users()}
-        users.add(user_profile.bot_owner_id)
+        if user_profile.bot_owner_id is not None:
+            users.add(user_profile.bot_owner_id)
         return users
 
 

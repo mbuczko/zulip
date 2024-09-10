@@ -118,7 +118,7 @@ strength allowed is controlled by two settings in
     figure out whether a channel with that name exists, but cannot see any
     other details about the channel.
 
-  - See [Channel permissions](https://zulip.com/help/stream-permissions) for more details.
+  - See [Channel permissions](https://zulip.com/help/channel-permissions) for more details.
 
 - Zulip supports editing the content and topics of messages that have
   already been sent. As a general philosophy, our policies provide
@@ -129,8 +129,9 @@ strength allowed is controlled by two settings in
 
   - Message content can only ever be modified by the original author.
 
-  - Any message visible to an organization owner or administrator can
-    be deleted at any time by that administrator.
+  - Organization administrators can configure who has permission to
+    delete their own message, and who can delete other users'
+    messages that they can see.
 
   - See
     [Restrict message editing and deletion](https://zulip.com/help/restrict-message-editing-and-deletion)

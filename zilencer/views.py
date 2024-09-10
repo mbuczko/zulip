@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator, validate_email
 from django.db import IntegrityError, transaction
 from django.db.models import Model
+from django.db.models.constants import OnConflict
 from django.http import HttpRequest, HttpResponse
 from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now as timezone_now
@@ -63,7 +64,7 @@ from zerver.lib.remote_server import (
     RealmCountDataForAnalytics,
     RealmDataForAnalytics,
 )
-from zerver.lib.request import RequestNotes, has_request_variables
+from zerver.lib.request import RequestNotes
 from zerver.lib.response import json_success
 from zerver.lib.send_email import FromAddress
 from zerver.lib.timestamp import timestamp_to_datetime
@@ -72,9 +73,11 @@ from zerver.lib.typed_endpoint import (
     JsonBodyPayload,
     RequiredStringConstraint,
     typed_endpoint,
+    typed_endpoint_without_parameters,
 )
 from zerver.lib.typed_endpoint_validators import check_string_fixed_length
 from zerver.lib.types import RemoteRealmDictValue
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import DisposableEmailError
 from zerver.views.push_notifications import validate_token
 from zilencer.auth import InvalidZulipServerKeyError
@@ -112,7 +115,7 @@ def validate_bouncer_token_request(token: str, kind: int) -> None:
 
 @csrf_exempt
 @require_post
-@has_request_variables
+@typed_endpoint_without_parameters
 def deactivate_remote_server(
     request: HttpRequest,
     remote_server: RemoteZulipServer,
@@ -224,7 +227,7 @@ def register_remote_server(
                 last_request_datetime=timezone_now(),
             )
             RemoteZulipServerAuditLog.objects.create(
-                event_type=RemoteZulipServerAuditLog.REMOTE_SERVER_CREATED,
+                event_type=AuditLogEventType.REMOTE_SERVER_CREATED,
                 server=remote_server,
                 event_time=remote_server.last_updated,
             )
@@ -796,20 +799,28 @@ def batch_create_table_data(
     row_objects: list[ModelT],
 ) -> None:
     # We ignore previously-existing data, in case it was truncated and
-    # re-created on the remote server.  `ignore_conflicts=True`
-    # cannot return the ids, or count thereof, of the new inserts,
-    # (see https://code.djangoproject.com/ticket/0138) so we rely on
-    # having a lock to accurately count them before and after.  This
-    # query is also well-indexed.
-    before_count = model._default_manager.filter(server=server).count()
-    model._default_manager.bulk_create(row_objects, batch_size=1000, ignore_conflicts=True)
-    after_count = model._default_manager.filter(server=server).count()
-    inserted_count = after_count - before_count
-    if inserted_count < len(row_objects):
+    # re-created on the remote server.  Because the existing
+    # `bulk_create(..., ignore_conflicts=True)` cannot yet return the
+    # ids, or count thereof, of the new inserts, (see
+    # https://code.djangoproject.com/ticket/30138), we reach in and
+    # call _insert with `returning_fields` in batches ourselves.
+    inserted_count = 0
+    expected_count = len(row_objects)
+    fields = [f for f in model._meta.fields if f.concrete and not f.generated and f.name != "id"]
+    while row_objects:
+        to_insert, row_objects = row_objects[:1000], row_objects[1000:]
+        result = model._default_manager._insert(  # type:ignore[attr-defined]  # This is a private method
+            to_insert,
+            fields=fields,
+            returning_fields=[model._meta.get_field("id")],
+            on_conflict=OnConflict.IGNORE,
+        )
+        inserted_count += len(result)
+    if inserted_count < expected_count:
         logging.warning(
             "Dropped %d duplicated rows while saving %d rows of %s for server %s/%s",
-            len(row_objects) - inserted_count,
-            len(row_objects),
+            expected_count - inserted_count,
+            expected_count,
             model._meta.db_table,
             server.hostname,
             server.uuid,
@@ -906,7 +917,7 @@ def update_remote_realm_data_for_server(
                     remote_id=None,
                     remote_realm=remote_realm,
                     realm_id=realm.id,
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     event_time=now,
                     extra_data={
                         "attr_name": remote_realm_attr,
@@ -925,7 +936,7 @@ def update_remote_realm_data_for_server(
                     remote_id=None,
                     remote_realm=remote_realm,
                     realm_id=uuid_to_realm_dict[str(remote_realm.uuid)].id,
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_LOCALLY_DELETED_RESTORED,
+                    event_type=AuditLogEventType.REMOTE_REALM_LOCALLY_DELETED_RESTORED,
                     event_time=now,
                 )
             )
@@ -966,7 +977,7 @@ def update_remote_realm_data_for_server(
                     remote_id=None,
                     remote_realm=remote_realm,
                     realm_id=None,
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_LOCALLY_DELETED,
+                    event_type=AuditLogEventType.REMOTE_REALM_LOCALLY_DELETED,
                     event_time=now,
                 )
             )
@@ -1122,7 +1133,7 @@ def handle_customer_migration_from_server_to_realm(
         RemoteRealmAuditLog(
             server=server,
             remote_realm=remote_realm,
-            event_type=RemoteRealmAuditLog.REMOTE_PLAN_TRANSFERRED_SERVER_TO_REALM,
+            event_type=AuditLogEventType.REMOTE_PLAN_TRANSFERRED_SERVER_TO_REALM,
             event_time=event_time,
             extra_data={
                 "attr_name": "plan_type",
@@ -1382,7 +1393,7 @@ def get_last_id_from_server(server: RemoteZulipServer, model: Any) -> int:
     return 0
 
 
-@has_request_variables
+@typed_endpoint_without_parameters
 def remote_server_check_analytics(request: HttpRequest, server: RemoteZulipServer) -> HttpResponse:
     result = {
         "last_realm_count_id": get_last_id_from_server(server, RemoteRealmCount),

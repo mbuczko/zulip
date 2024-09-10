@@ -35,6 +35,7 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.models.groups import SystemGroups
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.streams import (
     bulk_get_streams,
     get_realm_stream,
@@ -182,7 +183,7 @@ def create_stream_if_needed(
             realm=realm,
             acting_user=acting_user,
             modified_stream=stream,
-            event_type=RealmAuditLog.STREAM_CREATED,
+            event_type=AuditLogEventType.CHANNEL_CREATED,
             event_time=event_time,
         )
 
@@ -768,8 +769,8 @@ def list_to_streams(
             if not user_profile.realm.web_public_streams_enabled():
                 raise JsonableError(_("Web-public channels are not enabled."))
             if not user_profile.can_create_web_public_streams():
-                # We set create_web_public_stream_policy to allow only organization owners
-                # to create web-public streams, because of their sensitive nature.
+                # We set can_create_web_public_channel_group to allow only organization
+                # owners to create web-public streams, because of their sensitive nature.
                 raise JsonableError(_("Insufficient permission"))
 
         if message_retention_days_not_none:

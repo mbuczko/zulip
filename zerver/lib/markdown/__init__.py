@@ -118,6 +118,7 @@ class MessageRenderingResult:
     links_for_preview: set[str]
     user_ids_with_alert_words: set[int]
     potential_attachment_path_ids: list[str]
+    thumbnail_spinners: set[str]
 
 
 @dataclass
@@ -129,7 +130,7 @@ class DbData:
     sent_by_bot: bool
     stream_names: dict[str, int]
     translate_emoticons: bool
-    user_upload_previews: dict[str, MarkdownImageMetadata | None]
+    user_upload_previews: dict[str, MarkdownImageMetadata]
 
 
 # Format version of the Markdown rendering; stored along with rendered
@@ -268,7 +269,7 @@ def rewrite_local_links_to_relative(db_data: DbData | None, link: str) -> str:
     if db_data:
         realm_url_prefix = db_data.realm_url + "/"
         if link.startswith((realm_url_prefix + "#", realm_url_prefix + "user_uploads/")):
-            return link[len(realm_url_prefix) :]
+            return link.removeprefix(realm_url_prefix)
 
     return link
 
@@ -621,12 +622,13 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
             a.set("data-id", data_id)
         img = SubElement(a, "img")
         if image_url.startswith("/user_uploads/") and self.zmd.zulip_db_data:
-            path_id = image_url[len("/user_uploads/") :]
+            path_id = image_url.removeprefix("/user_uploads/")
 
             # We should have pulled the preview data for this image
             # (even if that's "no preview yet") from the database
             # before rendering; is_image should have enforced that.
             assert path_id in self.zmd.zulip_db_data.user_upload_previews
+            metadata = self.zmd.zulip_db_data.user_upload_previews[path_id]
 
             # Insert a placeholder image spinner.  We post-process
             # this content (see rewrite_thumbnailed_images in
@@ -635,6 +637,10 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
             # already exists when the message is sent.
             img.set("class", "image-loading-placeholder")
             img.set("src", "/static/images/loading/loader-black.svg")
+            img.set(
+                "data-original-dimensions",
+                f"{metadata.original_width_px}x{metadata.original_height_px}",
+            )
         else:
             img.set("src", image_url)
 
@@ -736,7 +742,7 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
         # a row for the ImageAttachment, then its header didn't parse
         # as a valid image type which libvips handles.
         if url.startswith("/user_uploads/") and self.zmd.zulip_db_data:
-            path_id = url[len("/user_uploads/") :]
+            path_id = url.removeprefix("/user_uploads/")
             return path_id in self.zmd.zulip_db_data.user_upload_previews
 
         return any(parsed_url.path.lower().endswith(ext) for ext in IMAGE_EXTENSIONS)
@@ -824,7 +830,7 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
                 elif split_url.path.startswith(("/embed/", "/shorts/", "/v/")):
                     id = split_url.path.split("/", 3)[2]
             elif split_url.hostname == "youtu.be" and split_url.path.startswith("/"):
-                id = split_url.path[len("/") :]
+                id = split_url.path.removeprefix("/")
 
         if id is not None and re.fullmatch(r"[0-9A-Za-z_-]+", id):
             return id
@@ -1273,7 +1279,7 @@ class InlineInterestingLinkProcessor(markdown.treeprocessors.Treeprocessor):
                 if not parsed_url.path.startswith("/user_uploads/"):
                     continue
 
-                path_id = parsed_url.path[len("/user_uploads/") :]
+                path_id = parsed_url.path.removeprefix("/user_uploads/")
                 self.zmd.zulip_rendering_result.potential_attachment_path_ids.append(path_id)
 
         if len(found_urls) == 0:
@@ -1927,6 +1933,8 @@ class UserMentionPattern(CompiledInlineProcessor):
             text = f"@{name}"
             if topic_wildcard:
                 el.set("class", "topic-mention")
+            elif stream_wildcard:
+                el.set("class", "user-mention channel-wildcard-mention")
             else:
                 el.set("class", "user-mention")
             if silent:
@@ -2625,6 +2633,7 @@ def do_convert(
         links_for_preview=set(),
         user_ids_with_alert_words=set(),
         potential_attachment_path_ids=[],
+        thumbnail_spinners=set(),
     )
 
     _md_engine.zulip_message = message
@@ -2683,9 +2692,10 @@ def do_convert(
 
         # Post-process the result with the rendered image previews:
         if user_upload_previews is not None:
-            content_with_thumbnails = rewrite_thumbnailed_images(
+            content_with_thumbnails, thumbnail_spinners = rewrite_thumbnailed_images(
                 rendering_result.rendered_content, user_upload_previews
             )
+            rendering_result.thumbnail_spinners = thumbnail_spinners
             if content_with_thumbnails is not None:
                 rendering_result.rendered_content = content_with_thumbnails
 

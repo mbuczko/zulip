@@ -67,6 +67,7 @@ const home_msg_list = {
 message_lists.all_rendered_message_lists = () => [home_msg_list, message_lists.current];
 
 const echo = zrequire("echo");
+const echo_state = zrequire("echo_state");
 const people = zrequire("people");
 const stream_data = zrequire("stream_data");
 
@@ -84,7 +85,7 @@ run_test("process_from_server for un-echoed messages", () => {
             local_id: "100.1",
         },
     ];
-    echo._patch_waiting_for_ack(waiting_for_ack);
+    echo_state._patch_waiting_for_ack(waiting_for_ack);
     const non_echo_messages = echo.process_from_server(server_messages);
     assert.deepEqual(non_echo_messages, server_messages);
 });
@@ -122,7 +123,7 @@ run_test("process_from_server for differently rendered messages", ({override}) =
             topic_links: new_value,
         },
     ];
-    echo._patch_waiting_for_ack(waiting_for_ack);
+    echo_state._patch_waiting_for_ack(waiting_for_ack);
     disparities = [];
     const non_echo_messages = echo.process_from_server(server_messages);
     assert.deepEqual(non_echo_messages, []);
@@ -171,7 +172,7 @@ run_test("process_from_server for messages to add to narrow", ({override}) => {
             topic_links: new_value,
         },
     ];
-    echo._patch_waiting_for_ack(waiting_for_ack);
+    echo_state._patch_waiting_for_ack(waiting_for_ack);
     const non_echo_messages = echo.process_from_server(server_messages);
     assert.deepEqual(non_echo_messages, []);
     assert.deepEqual(messages_to_add_to_narrow, [
@@ -217,13 +218,13 @@ run_test("build_display_recipient", () => {
 
     message = {
         type: "private",
-        private_message_recipient: "cordelia@zulip.com,hamlet@zulip.com",
+        private_message_recipient: "cordelia@zulip.com",
         sender_email: "iago@zulip.com",
         sender_full_name: "Iago",
         sender_id: 123,
     };
     display_recipient = echo.build_display_recipient(message);
-    assert.equal(display_recipient.length, 3);
+    assert.equal(display_recipient.length, 2);
 
     let iago = display_recipient.find((recipient) => recipient.email === "iago@zulip.com");
     assert.equal(iago.full_name, "Iago");
@@ -234,11 +235,6 @@ run_test("build_display_recipient", () => {
     );
     assert.equal(cordelia.full_name, "Cordelia");
     assert.equal(cordelia.id, 21);
-
-    const hamlet = display_recipient.find((recipient) => recipient.email === "hamlet@zulip.com");
-    assert.equal(hamlet.full_name, "hamlet@zulip.com");
-    assert.equal(hamlet.id, undefined);
-    assert.equal(hamlet.unknown_local_echo_user, true);
 
     message = {
         type: "private",
@@ -341,7 +337,7 @@ run_test("insert_local_message direct message", ({override}) => {
     let insert_message_called = false;
 
     const insert_new_messages = ([message]) => {
-        assert.equal(message.display_recipient.length, 3);
+        assert.equal(message.display_recipient.length, 2);
         insert_message_called = true;
         return [message];
     };
@@ -351,7 +347,7 @@ run_test("insert_local_message direct message", ({override}) => {
     });
 
     const message_request = {
-        private_message_recipient: "cordelia@zulip.com,hamlet@zulip.com",
+        private_message_recipient: "cordelia@zulip.com",
         type: "private",
         sender_email: "iago@zulip.com",
         sender_full_name: "Iago",

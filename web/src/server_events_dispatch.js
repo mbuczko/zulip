@@ -201,11 +201,11 @@ export function dispatch_normal_event(event) {
                 allow_edit_history: noop,
                 allow_message_editing: noop,
                 edit_topic_policy: noop,
-                user_group_edit_policy: noop,
+                user_group_edit_policy: user_group_edit.update_group_management_ui,
                 avatar_changes_disabled: settings_account.update_avatar_change_display,
                 bot_creation_policy: settings_bots.update_bot_permissions_ui,
+                can_delete_any_message_group: noop,
                 create_multiuse_invite_group: noop,
-                create_web_public_stream_policy: noop,
                 invite_to_stream_policy: noop,
                 default_code_block_language: noop,
                 default_language: noop,
@@ -266,12 +266,9 @@ export function dispatch_normal_event(event) {
                             gear_menu.rerender();
                         }
 
-                        if (
-                            event.property === "create_web_public_stream_policy" ||
-                            event.property === "enable_spectator_access"
-                        ) {
+                        if (event.property === "enable_spectator_access") {
                             stream_settings_ui.update_stream_privacy_choices(
-                                "create_web_public_stream_policy",
+                                "can_create_web_public_channel_group",
                             );
                         }
                     }
@@ -293,7 +290,8 @@ export function dispatch_normal_event(event) {
 
                                 if (
                                     key === "can_create_public_channel_group" ||
-                                    key === "can_create_private_channel_group"
+                                    key === "can_create_private_channel_group" ||
+                                    key === "can_create_web_public_channel_group"
                                 ) {
                                     stream_settings_ui.update_stream_privacy_choices(key);
                                 }
@@ -708,7 +706,7 @@ export function dispatch_normal_event(event) {
                 break;
             }
 
-            const user_display_settings = [
+            const user_preferences = [
                 "color_scheme",
                 "web_font_size_px",
                 "web_line_height_percent",
@@ -738,7 +736,7 @@ export function dispatch_normal_event(event) {
             ];
 
             const original_home_view = user_settings.web_home_view;
-            if (user_display_settings.includes(event.property)) {
+            if (user_preferences.includes(event.property)) {
                 user_settings[event.property] = event.value;
             }
             if (event.property === "default_language") {
@@ -855,9 +853,6 @@ export function dispatch_normal_event(event) {
             }
             if (event.property === "enter_sends") {
                 user_settings.enter_sends = event.value;
-                $(`.enter_sends_${!user_settings.enter_sends}`).hide();
-                $(`.enter_sends_${user_settings.enter_sends}`).show();
-                break;
             }
             if (event.property === "presence_enabled") {
                 user_settings.presence_enabled = event.value;
@@ -932,7 +927,7 @@ export function dispatch_normal_event(event) {
                     break;
                 case "update":
                     user_groups.update(event);
-                    user_group_edit.update_group(event.group_id);
+                    user_group_edit.update_group(event);
                     break;
                 default:
                     blueslip.error("Unexpected event type user_group/" + event.op);

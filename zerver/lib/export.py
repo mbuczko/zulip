@@ -73,6 +73,7 @@ from zerver.models import (
     UserTopic,
 )
 from zerver.models.presence import PresenceSequence
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_realm
 from zerver.models.users import get_system_bot, get_user_profile_by_id
 
@@ -1134,39 +1135,48 @@ def custom_fetch_direct_message_groups(response: TableData, context: Context) ->
         r["id"] for r in response["zerver_userprofile"] + response["zerver_userprofile_mirrordummy"]
     }
 
-    # First we get all huddles involving someone in the realm.
-    realm_huddle_subs = Subscription.objects.select_related("recipient").filter(
+    # First we get all direct message groups involving someone in the realm.
+    realm_direct_message_group_subs = Subscription.objects.select_related("recipient").filter(
         recipient__type=Recipient.DIRECT_MESSAGE_GROUP, user_profile__in=user_profile_ids
     )
-    realm_huddle_recipient_ids = {sub.recipient_id for sub in realm_huddle_subs}
+    realm_direct_message_group_recipient_ids = {
+        sub.recipient_id for sub in realm_direct_message_group_subs
+    }
 
     # Mark all Direct Message groups whose recipient ID contains a cross-realm user.
-    unsafe_huddle_recipient_ids = set()
+    unsafe_direct_message_group_recipient_ids = set()
     for sub in Subscription.objects.select_related("user_profile").filter(
-        recipient__in=realm_huddle_recipient_ids
+        recipient__in=realm_direct_message_group_recipient_ids
     ):
         if sub.user_profile.realm_id != realm.id:
             # In almost every case the other realm will be zulip.com
-            unsafe_huddle_recipient_ids.add(sub.recipient_id)
+            unsafe_direct_message_group_recipient_ids.add(sub.recipient_id)
 
-    # Now filter down to just those huddles that are entirely within the realm.
+    # Now filter down to just those direct message groups that are
+    # entirely within the realm.
     #
     # This is important for ensuring that the User objects needed
     # to import it on the other end exist (since we're only
     # exporting the users from this realm), at the cost of losing
     # some of these cross-realm messages.
-    huddle_subs = [
-        sub for sub in realm_huddle_subs if sub.recipient_id not in unsafe_huddle_recipient_ids
+    direct_message_group_subs = [
+        sub
+        for sub in realm_direct_message_group_subs
+        if sub.recipient_id not in unsafe_direct_message_group_recipient_ids
     ]
-    huddle_recipient_ids = {sub.recipient_id for sub in huddle_subs}
-    huddle_ids = {sub.recipient.type_id for sub in huddle_subs}
+    direct_message_group_recipient_ids = {sub.recipient_id for sub in direct_message_group_subs}
+    direct_message_group_ids = {sub.recipient.type_id for sub in direct_message_group_subs}
 
-    huddle_subscription_dicts = make_raw(huddle_subs)
-    huddle_recipients = make_raw(Recipient.objects.filter(id__in=huddle_recipient_ids))
+    direct_message_group_subscription_dicts = make_raw(direct_message_group_subs)
+    direct_message_group_recipients = make_raw(
+        Recipient.objects.filter(id__in=direct_message_group_recipient_ids)
+    )
 
-    response["_huddle_recipient"] = huddle_recipients
-    response["_huddle_subscription"] = huddle_subscription_dicts
-    response["zerver_huddle"] = make_raw(DirectMessageGroup.objects.filter(id__in=huddle_ids))
+    response["_huddle_recipient"] = direct_message_group_recipients
+    response["_huddle_subscription"] = direct_message_group_subscription_dicts
+    response["zerver_huddle"] = make_raw(
+        DirectMessageGroup.objects.filter(id__in=direct_message_group_ids)
+    )
 
 
 def custom_fetch_scheduled_messages(response: TableData, context: Context) -> None:
@@ -1582,7 +1592,11 @@ def export_uploads_and_avatars(
             valid_hashes=avatar_hash_values,
         )
 
-        emoji_paths = {get_emoji_path(realm_emoji) for realm_emoji in realm_emojis}
+        emoji_paths = set()
+        for realm_emoji in realm_emojis:
+            emoji_path = get_emoji_path(realm_emoji)
+            emoji_paths.add(emoji_path)
+            emoji_paths.add(emoji_path + ".original")
 
         export_files_from_s3(
             realm,
@@ -1623,7 +1637,11 @@ def _get_exported_s3_record(
     record.update(key.metadata)
 
     if processing_emoji:
-        record["file_name"] = os.path.basename(key.key)
+        file_name = os.path.basename(key.key)
+        # Both the main emoji file and the .original version should have the same
+        # file_name value in the record, as they reference the same emoji.
+        file_name = file_name.removesuffix(".original")
+        record["file_name"] = file_name
 
     if "user_profile_id" in record:
         user_profile = get_user_profile_by_id(int(record["user_profile_id"]))
@@ -1870,13 +1888,23 @@ def export_emoji_from_local(
     realm: Realm, local_dir: Path, output_dir: Path, realm_emojis: list[RealmEmoji]
 ) -> None:
     records = []
-    for count, realm_emoji in enumerate(realm_emojis, 1):
-        emoji_path = get_emoji_path(realm_emoji)
+
+    realm_emoji_helper_tuples: list[tuple[RealmEmoji, str]] = []
+    for realm_emoji in realm_emojis:
+        realm_emoji_path = get_emoji_path(realm_emoji)
 
         # Use 'mark_sanitized' to work around false positive caused by Pysa
         # thinking that 'realm' (and thus 'attachment' and 'attachment.path_id')
         # are user controlled
-        emoji_path = mark_sanitized(emoji_path)
+        realm_emoji_path = mark_sanitized(realm_emoji_path)
+
+        realm_emoji_path_original = realm_emoji_path + ".original"
+
+        realm_emoji_helper_tuples.append((realm_emoji, realm_emoji_path))
+        realm_emoji_helper_tuples.append((realm_emoji, realm_emoji_path_original))
+
+    for count, realm_emoji_helper_tuple in enumerate(realm_emoji_helper_tuples, 1):
+        realm_emoji_object, emoji_path = realm_emoji_helper_tuple
 
         local_path = os.path.join(local_dir, emoji_path)
         output_path = os.path.join(output_dir, emoji_path)
@@ -1884,7 +1912,7 @@ def export_emoji_from_local(
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         shutil.copy2(local_path, output_path)
         # Realm emoji author is optional.
-        author = realm_emoji.author
+        author = realm_emoji_object.author
         author_id = None
         if author:
             author_id = author.id
@@ -1893,9 +1921,9 @@ def export_emoji_from_local(
             author=author_id,
             path=emoji_path,
             s3_path=emoji_path,
-            file_name=realm_emoji.file_name,
-            name=realm_emoji.name,
-            deactivated=realm_emoji.deactivated,
+            file_name=realm_emoji_object.file_name,
+            name=realm_emoji_object.name,
+            deactivated=realm_emoji_object.deactivated,
         )
         records.append(record)
 
@@ -2462,7 +2490,7 @@ def get_realm_exports_serialized(user: UserProfile) -> list[dict[str, Any]]:
     # appropriate way to express for who issued them; this requires an
     # API change.
     all_exports = RealmAuditLog.objects.filter(
-        realm=user.realm, event_type=RealmAuditLog.REALM_EXPORTED
+        realm=user.realm, event_type=AuditLogEventType.REALM_EXPORTED
     ).exclude(acting_user=None)
     exports_dict = {}
     for export in all_exports:

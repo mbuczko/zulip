@@ -15,6 +15,8 @@ from corporate.lib.stripe import (
     RemoteRealmBillingSession,
     RemoteServerBillingSession,
     get_configured_fixed_price_plan_offer,
+    get_guest_user_count,
+    get_non_guest_user_count,
     get_price_per_license,
     get_push_status_for_remote_request,
     start_of_next_billing_cycle,
@@ -27,6 +29,7 @@ from corporate.models import (
     get_current_plan_by_customer,
 )
 from zerver.models import Realm
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_org_type_display_name, get_realm
 from zilencer.lib.remote_counts import MissingDataError
 from zilencer.models import (
@@ -58,6 +61,7 @@ class SponsorshipRequestDict(TypedDict):
 @dataclass
 class SponsorshipData:
     sponsorship_pending: bool = False
+    has_discount: bool = False
     monthly_discounted_price: int | None = None
     annual_discounted_price: int | None = None
     original_monthly_plan_price: int | None = None
@@ -110,9 +114,16 @@ class RemoteSupportData:
 
 
 @dataclass
+class UserData:
+    guest_user_count: int
+    non_guest_user_count: int
+
+
+@dataclass
 class CloudSupportData:
     plan_data: PlanData
     sponsorship_data: SponsorshipData
+    user_data: UserData
 
 
 def get_stripe_customer_url(stripe_id: str) -> str:
@@ -128,18 +139,30 @@ def get_realm_support_url(realm: Realm) -> str:
     return support_url
 
 
+def get_realm_user_data(realm: Realm) -> UserData:
+    non_guests = get_non_guest_user_count(realm)
+    guests = get_guest_user_count(realm)
+    return UserData(
+        guest_user_count=guests,
+        non_guest_user_count=non_guests,
+    )
+
+
 def get_customer_sponsorship_data(customer: Customer) -> SponsorshipData:
     pending = customer.sponsorship_pending
     licenses = customer.minimum_licenses
     plan_tier = customer.required_plan_tier
+    has_discount = False
     sponsorship_request = None
     monthly_discounted_price = None
     annual_discounted_price = None
     original_monthly_plan_price = None
     original_annual_plan_price = None
     if customer.monthly_discounted_price:
+        has_discount = True
         monthly_discounted_price = customer.monthly_discounted_price
     if customer.annual_discounted_price:
+        has_discount = True
         annual_discounted_price = customer.annual_discounted_price
     if plan_tier is not None:
         original_monthly_plan_price = get_price_per_license(
@@ -173,6 +196,7 @@ def get_customer_sponsorship_data(customer: Customer) -> SponsorshipData:
 
     return SponsorshipData(
         sponsorship_pending=pending,
+        has_discount=has_discount,
         monthly_discounted_price=monthly_discounted_price,
         annual_discounted_price=annual_discounted_price,
         original_monthly_plan_price=original_monthly_plan_price,
@@ -387,7 +411,7 @@ def get_data_for_remote_support_view(billing_session: BillingSession) -> RemoteS
         user_data = get_remote_server_guest_and_non_guest_count(billing_session.remote_server.id)
         stale_audit_log_data = has_stale_audit_log(billing_session.remote_server)
         date_created = RemoteZulipServerAuditLog.objects.get(
-            event_type=RemoteZulipServerAuditLog.REMOTE_SERVER_CREATED,
+            event_type=AuditLogEventType.REMOTE_SERVER_CREATED,
             server__id=billing_session.remote_server.id,
         ).event_time
         mobile_data = get_mobile_push_data(billing_session.remote_server)
@@ -416,6 +440,7 @@ def get_data_for_remote_support_view(billing_session: BillingSession) -> RemoteS
 
 def get_data_for_cloud_support_view(billing_session: BillingSession) -> CloudSupportData:
     assert isinstance(billing_session, RealmBillingSession)
+    user_data = get_realm_user_data(billing_session.realm)
     plan_data = get_plan_data_for_support_view(billing_session)
     if plan_data.customer is not None:
         sponsorship_data = get_customer_sponsorship_data(plan_data.customer)
@@ -425,4 +450,5 @@ def get_data_for_cloud_support_view(billing_session: BillingSession) -> CloudSup
     return CloudSupportData(
         plan_data=plan_data,
         sponsorship_data=sponsorship_data,
+        user_data=user_data,
     )

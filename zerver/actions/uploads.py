@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from zerver.lib.attachments import get_old_unclaimed_attachments, validate_attachment_request
@@ -14,6 +15,12 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.tornado.django_api import send_event_on_commit
+
+
+@dataclass
+class AttachmentChangeResult:
+    did_attachment_change: bool
+    detached_attachments: list[dict[str, Any]]
 
 
 def notify_attachment_update(
@@ -41,7 +48,7 @@ def do_claim_attachments(
             is_message_realm_public = stream.is_public()
             is_message_web_public = stream.is_web_public
 
-        if not validate_attachment_request(user_profile, path_id):
+        if not validate_attachment_request(user_profile, path_id)[0]:
             # Technically, there are 2 cases here:
             # * The user put something in their message that has the form
             # of an upload URL, but does not actually correspond to a previously
@@ -94,8 +101,8 @@ def do_delete_old_unclaimed_attachments(weeks_ago: int) -> None:
         already_removed.add(attachment.path_id)
         attachment.delete()
         if len(storage_paths) >= DELETE_BATCH_SIZE:
-            delete_message_attachments(storage_paths)
-            storage_paths = []
+            delete_message_attachments(storage_paths[:DELETE_BATCH_SIZE])
+            storage_paths = storage_paths[DELETE_BATCH_SIZE:]
     for archived_attachment in old_unclaimed_archived_attachments:
         if archived_attachment.path_id not in already_removed:
             storage_paths.append(archived_attachment.path_id)
@@ -107,15 +114,16 @@ def do_delete_old_unclaimed_attachments(weeks_ago: int) -> None:
                 image_row.delete()
         archived_attachment.delete()
         if len(storage_paths) >= DELETE_BATCH_SIZE:
-            delete_message_attachments(storage_paths)
-            storage_paths = []
+            delete_message_attachments(storage_paths[:DELETE_BATCH_SIZE])
+            storage_paths = storage_paths[DELETE_BATCH_SIZE:]
+
     if storage_paths:
         delete_message_attachments(storage_paths)
 
 
 def check_attachment_reference_change(
     message: Message | ScheduledMessage, rendering_result: MessageRenderingResult
-) -> bool:
+) -> AttachmentChangeResult:
     # For a unsaved message edit (message.* has been updated, but not
     # saved to the database), adjusts Attachment data to correspond to
     # the new content.
@@ -123,15 +131,21 @@ def check_attachment_reference_change(
     new_attachments = set(rendering_result.potential_attachment_path_ids)
 
     if new_attachments == prev_attachments:
-        return bool(prev_attachments)
+        return AttachmentChangeResult(bool(prev_attachments), [])
 
     to_remove = list(prev_attachments - new_attachments)
     if len(to_remove) > 0:
         attachments_to_update = Attachment.objects.filter(path_id__in=to_remove).select_for_update()
         message.attachment_set.remove(*attachments_to_update)
 
+    sender = message.sender
+    detached_attachments_query = Attachment.objects.filter(
+        path_id__in=to_remove, messages__isnull=True, owner=sender
+    )
+    detached_attachments = [attachment.to_dict() for attachment in detached_attachments_query]
+
     to_add = list(new_attachments - prev_attachments)
     if len(to_add) > 0:
         do_claim_attachments(message, to_add)
 
-    return message.attachment_set.exists()
+    return AttachmentChangeResult(message.attachment_set.exists(), detached_attachments)

@@ -100,6 +100,7 @@ def ensure_thumbnails(image_attachment: ImageAttachment) -> int:
             logger.info("Uploading %d bytes to %s", len(thumbnailed_bytes), thumbnail_path)
             upload_backend.upload_message_attachment(
                 thumbnail_path,
+                str(thumbnail_format),
                 content_type,
                 thumbnailed_bytes,
                 None,
@@ -170,7 +171,7 @@ def update_message_rendered_content(
                 message.rendered_content,
                 {} if image_data is None else {path_id: image_data},
                 {path_id} if image_data is None else set(),
-            )
+            )[0]
             if rendered_content is None:
                 # There were no updates -- for instance, if we re-run
                 # ensure_thumbnails on an ImageAttachment we already

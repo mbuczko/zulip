@@ -8,6 +8,7 @@ from typing import TypeVar
 
 import pyvips
 from bs4 import BeautifulSoup
+from bs4.formatter import EntitySubstitution, HTMLFormatter
 from django.utils.translation import gettext as _
 from typing_extensions import override
 
@@ -326,23 +327,49 @@ def split_thumbnail_path(file_path: str) -> tuple[str, BaseThumbnailFormat]:
 
 @dataclass
 class MarkdownImageMetadata:
-    url: str
+    url: str | None
     is_animated: bool
     original_width_px: int
     original_height_px: int
 
 
 def get_user_upload_previews(
-    realm_id: int, content: str
-) -> dict[str, MarkdownImageMetadata | None]:
-    matches = re.findall(r"/user_uploads/(\d+/[/\w.-]+)", content)
-    upload_preview_data: dict[str, MarkdownImageMetadata | None] = {}
-    for image_attachment in ImageAttachment.objects.filter(realm_id=realm_id, path_id__in=matches):
+    realm_id: int,
+    content: str,
+    lock: bool = False,
+    enqueue: bool = True,
+    path_ids: list[str] | None = None,
+) -> dict[str, MarkdownImageMetadata]:
+    if path_ids is None:
+        path_ids = re.findall(r"/user_uploads/(\d+/[/\w.-]+)", content)
+    if not path_ids:
+        return {}
+
+    upload_preview_data: dict[str, MarkdownImageMetadata] = {}
+
+    image_attachments = ImageAttachment.objects.filter(realm_id=realm_id, path_id__in=path_ids)
+    if lock:
+        image_attachments = image_attachments.select_for_update()
+    for image_attachment in image_attachments:
         if image_attachment.thumbnail_metadata == []:
             # Image exists, and header of it parsed as a valid image,
             # but has not been thumbnailed yet; we will render a
             # spinner.
-            upload_preview_data[image_attachment.path_id] = None
+            upload_preview_data[image_attachment.path_id] = MarkdownImageMetadata(
+                url=None,
+                is_animated=False,
+                original_width_px=image_attachment.original_width_px,
+                original_height_px=image_attachment.original_height_px,
+            )
+
+            # We re-queue the row for thumbnailing to make sure that
+            # we do eventually thumbnail it (e.g. if this is a
+            # historical upload from before this system, which we
+            # backfilled ImageAttachment rows for); this is a no-op in
+            # the worker if all of the currently-configured thumbnail
+            # formats have already been generated.
+            if enqueue:
+                queue_event_on_commit("thumbnail", {"id": image_attachment.id})
         else:
             url, is_animated = get_default_thumbnail_url(image_attachment)
             upload_preview_data[image_attachment.path_id] = MarkdownImageMetadata(
@@ -375,14 +402,26 @@ def get_default_thumbnail_url(image_attachment: ImageAttachment) -> tuple[str, b
     )
 
 
+# Like HTMLFormatter.REGISTRY["html5"], this formatter avoids producing
+# self-closing tags, but it differs by avoiding unnecessary escaping with
+# HTML5-specific entities that cannot be parsed by lxml and libxml2
+# (https://bugs.launchpad.net/lxml/+bug/2031045).
+html_formatter = HTMLFormatter(
+    entity_substitution=EntitySubstitution.substitute_xml,  # not substitute_html
+    void_element_close_prefix="",
+    empty_attributes_are_booleans=True,
+)
+
+
 def rewrite_thumbnailed_images(
     rendered_content: str,
-    images: dict[str, MarkdownImageMetadata | None],
+    images: dict[str, MarkdownImageMetadata],
     to_delete: set[str] | None = None,
-) -> str | None:
+) -> tuple[str | None, set[str]]:
     if not images and not to_delete:
-        return None
+        return None, set()
 
+    remaining_thumbnails = set()
     parsed_message = BeautifulSoup(rendered_content, "html.parser")
 
     changed = False
@@ -404,7 +443,7 @@ def rewrite_thumbnailed_images(
             # second image, the first image will have no placeholder.
             continue
 
-        path_id = image_link["href"][len("/user_uploads/") :]
+        path_id = image_link["href"].removeprefix("/user_uploads/")
         if to_delete and path_id in to_delete:
             # This was not a valid thumbnail target, for some reason.
             # Trim out the whole "message_inline_image" element, since
@@ -415,11 +454,14 @@ def rewrite_thumbnailed_images(
 
         image_data = images.get(path_id)
         if image_data is None:
-            # Has not been thumbnailed yet; leave it as a spinner.
-            # This happens routinely when a message contained multiple
-            # unthumbnailed images, and only one of those images just
-            # completed thumbnailing.
-            pass
+            # The message has multiple images, and we're updating just
+            # one image, and it's not this one.  Leave this one as-is.
+            remaining_thumbnails.add(path_id)
+        elif image_data.url is None:
+            # We're re-rendering the whole message, so fetched all of
+            # the image metadata rows; this is one of the images we
+            # about, but is not thumbnailed yet.
+            remaining_thumbnails.add(path_id)
         else:
             changed = True
             del image_tag["class"]
@@ -431,7 +473,8 @@ def rewrite_thumbnailed_images(
                 image_tag["data-animated"] = "true"
 
     if changed:
-        # The formatter="html5" means we do not produce self-closing tags
-        return parsed_message.encode(formatter="html5").decode().strip()
+        return parsed_message.encode(
+            formatter=html_formatter
+        ).decode().strip(), remaining_thumbnails
     else:
-        return None
+        return None, remaining_thumbnails

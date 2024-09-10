@@ -153,8 +153,8 @@ $(() => {
     $<HTMLInputElement>(".register-page input#email, .login-page-container input#id_username").on(
         "focusout keydown",
         function (e) {
-            // check if it is the "focusout" or if it is a keydown, then check if
-            // the keycode was the one for "Enter".
+            // check if it is the "focusout" or if it is a keydown, then check
+            // if the key was "Enter"
             if (e.type === "focusout" || e.key === "Enter") {
                 $(this).val($(this).val()!.trim());
             }
@@ -307,13 +307,12 @@ $(() => {
         $(e.target).hide();
     });
 
-    $("#how-realm-creator-found-zulip select").on("change", function () {
-        const elements: Record<string, string> = {
-            Other: "how-realm-creator-found-zulip-other",
-            Advertisement: "how-realm-creator-found-zulip-where-ad",
-            "At an organization that's using it":
-                "how-realm-creator-found-zulip-which-organization",
-        };
+    $<HTMLSelectElement>("#how-realm-creator-found-zulip select").on("change", function () {
+        const elements = new Map([
+            ["other", "how-realm-creator-found-zulip-other"],
+            ["ad", "how-realm-creator-found-zulip-where-ad"],
+            ["existing_user", "how-realm-creator-found-zulip-which-organization"],
+        ]);
 
         const hideElement = (element: string): void => {
             const $element = $(`#${element}`);
@@ -329,16 +328,15 @@ $(() => {
         };
 
         // Reset state
-        for (const element of Object.values(elements)) {
+        for (const element of elements.values()) {
             if (element) {
                 hideElement(element);
             }
         }
 
         // Show the additional input box if needed.
-        const selected_option = $("option:selected", this).text();
-        const selected_element = elements[selected_option];
-        if (selected_element) {
+        const selected_element = elements.get(this.value);
+        if (selected_element !== undefined) {
             showElement(selected_element);
         }
     });

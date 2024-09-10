@@ -85,6 +85,10 @@ kbd {
     order: 3;
 }
 
+.lowercase {
+    text-transform: lowercase;
+}
+
 /*
 Consistent placeholder styling, introduced to allow us to style the
 Reply box like a placeholder.  Chrome uses color to set placeholder,
@@ -693,6 +697,11 @@ div.overlay {
         box-shadow: 0 1px 4px 0 hsl(235deg 18% 7%);
         outline: none;
     }
+
+    &:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
 }
 
 .color_animated_button {
@@ -796,6 +805,10 @@ div.overlay {
     .actions {
         width: 1%;
         white-space: nowrap;
+    }
+
+    th.actions {
+        padding-right: 1em;
     }
 
     & th,
@@ -1040,11 +1053,6 @@ div.overlay {
 .overlay-messages-container .overlay-message-row {
     padding: 5px 0;
 
-    > div {
-        display: inline-block;
-        vertical-align: top;
-    }
-
     .overlay-message-info-box {
         width: 100%;
         margin-bottom: 10px;
@@ -1145,11 +1153,15 @@ div.overlay {
     }
 }
 
+.dropdown_widget_with_label_wrapper {
+    margin-top: 0 !important;
+}
+
 .dropdown-current-value-not-in-options,
 .setting-disabled-option {
     color: hsl(38deg 46% 54%);
 
-    & i {
+    .setting-disabled-option-icon {
         /* Values set to match text alignment in stream dropdown. */
         padding: 0 5px 0 1px;
     }

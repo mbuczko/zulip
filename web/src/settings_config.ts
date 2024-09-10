@@ -129,6 +129,14 @@ export const web_home_view_values = {
     },
 };
 
+type ColorScheme = "automatic" | "dark" | "light";
+export type ColorSchemeValues = {
+    [key in ColorScheme]: {
+        code: number;
+        description: string;
+    };
+};
+
 export const color_scheme_values = {
     automatic: {
         code: 1,
@@ -157,7 +165,7 @@ export const twenty_four_hour_time_values = {
 
 export type DisplaySettings = {
     settings: {
-        user_display_settings: string[];
+        user_preferences: string[];
     };
     render_group?: boolean;
 };
@@ -165,7 +173,7 @@ export type DisplaySettings = {
 /* istanbul ignore next */
 export const information_section_checkbox_group: DisplaySettings = {
     settings: {
-        user_display_settings: [
+        user_preferences: [
             "starred_message_counts",
             "receives_typing_notifications",
             "fluid_layout_width",
@@ -177,7 +185,7 @@ export const information_section_checkbox_group: DisplaySettings = {
 export const get_information_density_preferences = (): DisplaySettings => ({
     render_group: page_params.development_environment,
     settings: {
-        user_display_settings: ["web_font_size_px", "web_line_height_percent"],
+        user_preferences: ["web_font_size_px", "web_line_height_percent"],
     },
 });
 
@@ -298,29 +306,6 @@ export const wildcard_mention_policy_values = {
     },
     nobody: {
         order: 6,
-        code: 6,
-        description: $t({defaultMessage: "Nobody"}),
-    },
-};
-
-export const create_web_public_stream_policy_values = {
-    by_moderators_only: {
-        order: 1,
-        code: 4,
-        description: $t({defaultMessage: "Admins and moderators"}),
-    },
-    by_admins_only: {
-        order: 2,
-        code: 2,
-        description: $t({defaultMessage: "Admins only"}),
-    },
-    by_owners_only: {
-        order: 3,
-        code: 7,
-        description: $t({defaultMessage: "Owners only"}),
-    },
-    nobody: {
-        order: 4,
         code: 6,
         description: $t({defaultMessage: "Nobody"}),
     },
@@ -576,6 +561,9 @@ export const preferences_settings_labels = {
     ),
     fluid_layout_width: $t({defaultMessage: "Use full width on wide screens"}),
     high_contrast_mode: $t({defaultMessage: "High contrast mode"}),
+    enter_sends: new Handlebars.SafeString(
+        $t_html({defaultMessage: "<kbd>Enter</kbd> sends when composing a message"}),
+    ),
     receives_typing_notifications: $t({defaultMessage: "Show when other users are typing"}),
     starred_message_counts: $t({defaultMessage: "Show counts for starred messages"}),
     twenty_four_hour_time: $t({defaultMessage: "Time format"}),
@@ -640,7 +628,6 @@ export const realm_user_settings_defaults_labels = {
         defaultMessage: "Display availability to other users",
     }),
     realm_presence_enabled_parens_text: $t({defaultMessage: "invisible mode off"}),
-    realm_enter_sends: $t({defaultMessage: "Enter sends when composing a message"}),
     realm_send_read_receipts: $t({defaultMessage: "Allow other users to view read receipts"}),
     realm_send_private_typing_notifications: $t({
         defaultMessage: "Let recipients see when a user is typing direct messages",

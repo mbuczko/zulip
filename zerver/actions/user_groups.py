@@ -25,8 +25,9 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.models.groups import SystemGroups
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.users import active_user_ids
-from zerver.tornado.django_api import send_event, send_event_on_commit
+from zerver.tornado.django_api import send_event_on_commit
 
 
 class MemberGroupUserDict(TypedDict):
@@ -35,7 +36,7 @@ class MemberGroupUserDict(TypedDict):
     date_joined: datetime
 
 
-@transaction.atomic
+@transaction.atomic(savepoint=False)
 def create_user_group_in_database(
     name: str,
     members: list[UserProfile],
@@ -72,7 +73,7 @@ def create_user_group_in_database(
         RealmAuditLog(
             realm=realm,
             acting_user=acting_user,
-            event_type=RealmAuditLog.USER_GROUP_CREATED,
+            event_type=AuditLogEventType.USER_GROUP_CREATED,
             event_time=creation_time,
             modified_user_group=user_group,
         ),
@@ -80,7 +81,7 @@ def create_user_group_in_database(
         RealmAuditLog(
             realm=realm,
             acting_user=acting_user,
-            event_type=RealmAuditLog.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
+            event_type=AuditLogEventType.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
             event_time=creation_time,
             modified_user=member,
             modified_user_group=user_group,
@@ -179,10 +180,11 @@ def do_send_create_user_group_event(
             id=user_group.id,
             is_system_group=user_group.is_system_group,
             direct_subgroup_ids=[direct_subgroup.id for direct_subgroup in direct_subgroups],
+            can_manage_group=get_group_setting_value_for_api(user_group.can_manage_group),
             can_mention_group=get_group_setting_value_for_api(user_group.can_mention_group),
         ),
     )
-    send_event(user_group.realm, event, active_user_ids(user_group.realm_id))
+    send_event_on_commit(user_group.realm, event, active_user_ids(user_group.realm_id))
 
 
 def check_add_user_group(
@@ -213,7 +215,7 @@ def do_send_user_group_update_event(
     user_group: NamedUserGroup, data: dict[str, str | int | AnonymousSettingGroupDict]
 ) -> None:
     event = dict(type="user_group", op="update", group_id=user_group.id, data=data)
-    send_event(user_group.realm, event, active_user_ids(user_group.realm_id))
+    send_event_on_commit(user_group.realm, event, active_user_ids(user_group.realm_id))
 
 
 @transaction.atomic(savepoint=False)
@@ -227,7 +229,7 @@ def do_update_user_group_name(
         RealmAuditLog.objects.create(
             realm=user_group.realm,
             modified_user_group=user_group,
-            event_type=RealmAuditLog.USER_GROUP_NAME_CHANGED,
+            event_type=AuditLogEventType.USER_GROUP_NAME_CHANGED,
             event_time=timezone_now(),
             acting_user=acting_user,
             extra_data={
@@ -250,7 +252,7 @@ def do_update_user_group_description(
     RealmAuditLog.objects.create(
         realm=user_group.realm,
         modified_user_group=user_group,
-        event_type=RealmAuditLog.USER_GROUP_DESCRIPTION_CHANGED,
+        event_type=AuditLogEventType.USER_GROUP_DESCRIPTION_CHANGED,
         event_time=timezone_now(),
         acting_user=acting_user,
         extra_data={
@@ -292,7 +294,7 @@ def bulk_add_members_to_user_groups(
             realm=user_group.realm,
             modified_user_id=user_id,
             modified_user_group=user_group,
-            event_type=RealmAuditLog.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
+            event_type=AuditLogEventType.USER_GROUP_DIRECT_USER_MEMBERSHIP_ADDED,
             event_time=now,
             acting_user=acting_user,
         )
@@ -325,7 +327,7 @@ def bulk_remove_members_from_user_groups(
             realm=user_group.realm,
             modified_user_id=user_id,
             modified_user_group=user_group,
-            event_type=RealmAuditLog.USER_GROUP_DIRECT_USER_MEMBERSHIP_REMOVED,
+            event_type=AuditLogEventType.USER_GROUP_DIRECT_USER_MEMBERSHIP_REMOVED,
             event_time=now,
             acting_user=acting_user,
         )
@@ -364,7 +366,7 @@ def add_subgroups_to_user_group(
         RealmAuditLog(
             realm=user_group.realm,
             modified_user_group=user_group,
-            event_type=RealmAuditLog.USER_GROUP_DIRECT_SUBGROUP_MEMBERSHIP_ADDED,
+            event_type=AuditLogEventType.USER_GROUP_DIRECT_SUBGROUP_MEMBERSHIP_ADDED,
             event_time=now,
             acting_user=acting_user,
             extra_data={"subgroup_ids": subgroup_ids},
@@ -373,7 +375,7 @@ def add_subgroups_to_user_group(
             RealmAuditLog(
                 realm=user_group.realm,
                 modified_user_group_id=subgroup_id,
-                event_type=RealmAuditLog.USER_GROUP_DIRECT_SUPERGROUP_MEMBERSHIP_ADDED,
+                event_type=AuditLogEventType.USER_GROUP_DIRECT_SUPERGROUP_MEMBERSHIP_ADDED,
                 event_time=now,
                 acting_user=acting_user,
                 extra_data={"supergroup_ids": [user_group.id]},
@@ -401,7 +403,7 @@ def remove_subgroups_from_user_group(
         RealmAuditLog(
             realm=user_group.realm,
             modified_user_group=user_group,
-            event_type=RealmAuditLog.USER_GROUP_DIRECT_SUBGROUP_MEMBERSHIP_REMOVED,
+            event_type=AuditLogEventType.USER_GROUP_DIRECT_SUBGROUP_MEMBERSHIP_REMOVED,
             event_time=now,
             acting_user=acting_user,
             extra_data={"subgroup_ids": subgroup_ids},
@@ -410,7 +412,7 @@ def remove_subgroups_from_user_group(
             RealmAuditLog(
                 realm=user_group.realm,
                 modified_user_group_id=subgroup_id,
-                event_type=RealmAuditLog.USER_GROUP_DIRECT_SUPERGROUP_MEMBERSHIP_REMOVED,
+                event_type=AuditLogEventType.USER_GROUP_DIRECT_SUPERGROUP_MEMBERSHIP_REMOVED,
                 event_time=now,
                 acting_user=acting_user,
                 extra_data={"supergroup_ids": [user_group.id]},
@@ -425,7 +427,7 @@ def remove_subgroups_from_user_group(
 
 def do_send_delete_user_group_event(realm: Realm, user_group_id: int, realm_id: int) -> None:
     event = dict(type="user_group", op="remove", group_id=user_group_id)
-    send_event(realm, event, active_user_ids(realm_id))
+    send_event_on_commit(realm, event, active_user_ids(realm_id))
 
 
 def check_delete_user_group(user_group: NamedUserGroup, *, acting_user: UserProfile) -> None:
@@ -440,13 +442,19 @@ def do_change_user_group_permission_setting(
     setting_name: str,
     setting_value_group: UserGroup,
     *,
-    old_setting_api_value: int | AnonymousSettingGroupDict,
+    old_setting_api_value: int | AnonymousSettingGroupDict | None = None,
     acting_user: UserProfile | None,
 ) -> None:
     old_value = getattr(user_group, setting_name)
     setattr(user_group, setting_name, setting_value_group)
     user_group.save()
 
+    if old_setting_api_value is None:
+        # Most production callers will have computed this as part of
+        # verifying whether there's an actual change to make, but it
+        # feels quite clumsy to have to pass it from unit tests, so we
+        # compute it here if not provided by the caller.
+        old_setting_api_value = get_group_setting_value_for_api(old_value)
     new_setting_api_value = get_group_setting_value_for_api(setting_value_group)
 
     if not hasattr(old_value, "named_user_group") and hasattr(
@@ -462,7 +470,7 @@ def do_change_user_group_permission_setting(
     RealmAuditLog.objects.create(
         realm=user_group.realm,
         acting_user=acting_user,
-        event_type=RealmAuditLog.USER_GROUP_GROUP_BASED_SETTING_CHANGED,
+        event_type=AuditLogEventType.USER_GROUP_GROUP_BASED_SETTING_CHANGED,
         event_time=timezone_now(),
         modified_user_group=user_group,
         extra_data={

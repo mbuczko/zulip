@@ -1049,6 +1049,8 @@ group_setting_update_data_type = DictType(
         ("can_access_all_users_group", int),
         ("can_create_public_channel_group", group_setting_type),
         ("can_create_private_channel_group", group_setting_type),
+        ("can_create_web_public_channel_group", group_setting_type),
+        ("can_delete_any_message_group", group_setting_type),
         ("direct_message_initiator_group", group_setting_type),
         ("direct_message_permission_group", group_setting_type),
     ],
@@ -1672,7 +1674,6 @@ update_message_content_fields: list[tuple[str, object]] = [
     ("is_me_message", bool),
     ("orig_content", str),
     ("orig_rendered_content", str),
-    ("prev_rendered_content_version", int),
 ]
 
 update_message_content_or_embedded_data_fields: list[tuple[str, object]] = [
@@ -1814,6 +1815,7 @@ group_type = DictType(
         ("direct_subgroup_ids", ListType(int)),
         ("description", str),
         ("is_system_group", bool),
+        ("can_manage_group", group_setting_type),
         ("can_mention_group", group_setting_type),
     ]
 )
@@ -1861,6 +1863,7 @@ user_group_data_type = DictType(
     optional_keys=[
         ("name", str),
         ("description", str),
+        ("can_manage_group", group_setting_type),
         ("can_mention_group", group_setting_type),
     ],
 )

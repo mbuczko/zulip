@@ -150,7 +150,7 @@ const keydown_either_mappings = {
 };
 
 const keypress_mappings = {
-    42: {name: "star_deprecated", message_view_only: true}, // '*'
+    42: {name: "open_starred_message_view", message_view_only: true}, // '*'
     43: {name: "thumbs_up_emoji", message_view_only: true}, // '+'
     61: {name: "upvote_first_emoji", message_view_only: true}, // '='
     45: {name: "toggle_message_collapse", message_view_only: true}, // '-'
@@ -858,6 +858,18 @@ export function process_hotkey(e, hotkey) {
             return true;
         }
 
+        if (event_name === "down_arrow" && $(":focus").attr("id") === "search_query") {
+            $("#search_query").trigger("blur");
+            message_scroll_state.set_keyboard_triggered_current_scroll(true);
+            navigate.down(true);
+        }
+
+        if (event_name === "up_arrow" && $(":focus").attr("id") === "search_query") {
+            $("#search_query").trigger("blur");
+            message_scroll_state.set_keyboard_triggered_current_scroll(true);
+            navigate.up(true);
+        }
+
         if (
             ((event_name === "down_arrow" || event_name === "page_down" || event_name === "end") &&
                 compose_state.focus_in_empty_compose()) ||
@@ -984,6 +996,9 @@ export function process_hotkey(e, hotkey) {
         case "open_inbox":
             browser_history.go_to_location("#inbox");
             return true;
+        case "open_starred_message_view":
+            browser_history.go_to_location("#narrow/is/starred");
+            return true;
         case "open_combined_feed":
             browser_history.go_to_location("#feed");
             return true;
@@ -1031,9 +1046,6 @@ export function process_hotkey(e, hotkey) {
             return true;
         case "C_deprecated":
             deprecated_feature_notice.maybe_show_deprecation_notice("Shift + C");
-            return true;
-        case "star_deprecated":
-            deprecated_feature_notice.maybe_show_deprecation_notice("*");
             return true;
     }
 

@@ -16,11 +16,13 @@ import orjson
 import responses
 from django.apps import apps
 from django.conf import settings
+from django.core.files.uploadedfile import UploadedFile
 from django.core.mail import EmailMessage
 from django.core.signals import got_request_exception
 from django.db import connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.state import StateApps
+from django.db.models import QuerySet
 from django.db.utils import IntegrityError
 from django.http import HttpRequest, HttpResponse, HttpResponseBase
 from django.http.response import ResponseHeaders
@@ -32,7 +34,6 @@ from django.urls import resolve
 from django.utils import translation
 from django.utils.module_loading import import_string
 from django.utils.timezone import now as timezone_now
-from django_stubs_ext import ValuesQuerySet
 from fakeldap import MockLDAP
 from openapi_core.contrib.django import DjangoOpenAPIRequest, DjangoOpenAPIResponse
 from requests import PreparedRequest
@@ -76,6 +77,7 @@ from zerver.lib.test_helpers import (
 )
 from zerver.lib.thumbnail import ThumbnailFormat
 from zerver.lib.topic import RESOLVED_TOPIC_PREFIX, filter_by_topic_name_via_message
+from zerver.lib.upload import upload_message_attachment_from_request
 from zerver.lib.user_groups import get_system_user_group_for_user
 from zerver.lib.users import get_api_key
 from zerver.lib.webhooks.common import (
@@ -1258,7 +1260,7 @@ Output:
         """
         self.assertEqual(self.get_json_error(result, status_code=status_code), msg)
 
-    def assert_length(self, items: Collection[Any] | ValuesQuerySet[Any, Any], count: int) -> None:
+    def assert_length(self, items: Collection[Any] | QuerySet[Any, Any], count: int) -> None:
         actual_count = len(items)
         if actual_count != count:  # nocoverage
             print("\nITEMS:\n")
@@ -1647,7 +1649,7 @@ Output:
             # as the actual value of the attribute in LDAP.
             for attr, value in attrs.items():
                 if isinstance(value, str) and value.startswith("file:"):
-                    with open(value[5:], "rb") as f:
+                    with open(value.removeprefix("file:"), "rb") as f:
                         attrs[attr] = [f.read()]
 
         ldap_patcher = mock.patch("django_auth_ldap.config.ldap.initialize")
@@ -2026,6 +2028,14 @@ Output:
             mock.patch("zerver.views.upload.THUMBNAIL_OUTPUT_FORMATS", thumbnail_formats),
         ):
             yield
+
+    def create_attachment_helper(self, user: UserProfile) -> str:
+        with tempfile.NamedTemporaryFile() as attach_file:
+            attach_file.write(b"Hello, World!")
+            attach_file.flush()
+            with open(attach_file.name, "rb") as fp:
+                file_path = upload_message_attachment_from_request(UploadedFile(fp), user)[0]
+                return file_path
 
 
 class ZulipTestCase(ZulipTestCaseMixin, TestCase):

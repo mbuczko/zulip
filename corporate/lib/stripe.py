@@ -7,7 +7,7 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, IntEnum
 from functools import wraps
 from typing import Any, Literal, TypedDict, TypeVar
 from urllib.parse import urlencode, urljoin
@@ -54,6 +54,7 @@ from zerver.lib.timestamp import datetime_to_timestamp, timestamp_to_datetime
 from zerver.lib.url_encoding import append_url_query_string
 from zerver.lib.utils import assert_is_not_none
 from zerver.models import Realm, RealmAuditLog, UserProfile
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_org_type_display_name, get_realm
 from zerver.models.users import get_system_bot
 from zilencer.lib.remote_counts import MissingDataError
@@ -154,22 +155,26 @@ def get_cached_seat_count(realm: Realm) -> int:
     return get_latest_seat_count(realm)
 
 
-def get_seat_count(
-    realm: Realm, extra_non_guests_count: int = 0, extra_guests_count: int = 0
-) -> int:
-    non_guests = (
+def get_non_guest_user_count(realm: Realm) -> int:
+    return (
         UserProfile.objects.filter(realm=realm, is_active=True, is_bot=False)
         .exclude(role=UserProfile.ROLE_GUEST)
         .count()
-    ) + extra_non_guests_count
-
-    # This guest count calculation should match the similar query in render_stats().
-    guests = (
-        UserProfile.objects.filter(
-            realm=realm, is_active=True, is_bot=False, role=UserProfile.ROLE_GUEST
-        ).count()
-        + extra_guests_count
     )
+
+
+def get_guest_user_count(realm: Realm) -> int:
+    # Same query to get guest user count as in render_stats in analytics/views/stats.py.
+    return UserProfile.objects.filter(
+        realm=realm, is_active=True, is_bot=False, role=UserProfile.ROLE_GUEST
+    ).count()
+
+
+def get_seat_count(
+    realm: Realm, extra_non_guests_count: int = 0, extra_guests_count: int = 0
+) -> int:
+    non_guests = get_non_guest_user_count(realm) + extra_non_guests_count
+    guests = get_guest_user_count(realm) + extra_guests_count
 
     # This formula achieves the pricing of the first 5*N guests
     # being free of charge (where N is the number of non-guests in the organization)
@@ -579,6 +584,7 @@ class SupportType(Enum):
     update_required_plan_tier = 8
     configure_fixed_price_plan = 9
     delete_fixed_price_next_plan = 10
+    configure_temporary_courtesy_plan = 11
 
 
 class SupportViewRequest(TypedDict, total=False):
@@ -596,7 +602,7 @@ class SupportViewRequest(TypedDict, total=False):
     sent_invoice_id: str | None
 
 
-class AuditLogEventType(Enum):
+class BillingSessionEventType(IntEnum):
     STRIPE_CUSTOMER_CREATED = 1
     STRIPE_CARD_CHANGED = 2
     CUSTOMER_PLAN_CREATED = 3
@@ -618,7 +624,7 @@ class PlanTierChangeType(Enum):
 
 
 class BillingSessionAuditLogEventError(Exception):
-    def __init__(self, event_type: AuditLogEventType) -> None:
+    def __init__(self, event_type: BillingSessionEventType) -> None:
         self.message = f"Unknown audit log event type: {event_type}"
         super().__init__(self.message)
 
@@ -736,13 +742,13 @@ class BillingSession(ABC):
         pass
 
     @abstractmethod
-    def get_audit_log_event(self, event_type: AuditLogEventType) -> int:
+    def get_audit_log_event(self, event_type: BillingSessionEventType) -> int:
         pass
 
     @abstractmethod
     def write_to_audit_log(
         self,
-        event_type: AuditLogEventType,
+        event_type: BillingSessionEventType,
         event_time: datetime,
         *,
         background_update: bool = False,
@@ -1089,7 +1095,7 @@ class BillingSession(ABC):
         )
         event_time = timestamp_to_datetime(stripe_customer.created)
         with transaction.atomic():
-            self.write_to_audit_log(AuditLogEventType.STRIPE_CUSTOMER_CREATED, event_time)
+            self.write_to_audit_log(BillingSessionEventType.STRIPE_CUSTOMER_CREATED, event_time)
             customer = self.update_or_create_customer(stripe_customer.id)
         return customer
 
@@ -1100,7 +1106,7 @@ class BillingSession(ABC):
         stripe.Customer.modify(
             stripe_customer_id, invoice_settings={"default_payment_method": payment_method}
         )
-        self.write_to_audit_log(AuditLogEventType.STRIPE_CARD_CHANGED, timezone_now())
+        self.write_to_audit_log(BillingSessionEventType.STRIPE_CARD_CHANGED, timezone_now())
         if pay_invoices:
             for stripe_invoice in stripe.Invoice.list(
                 collection_method="charge_automatically",
@@ -1318,7 +1324,7 @@ class BillingSession(ABC):
             self.apply_discount_to_plan(next_plan, customer)
 
         self.write_to_audit_log(
-            event_type=AuditLogEventType.DISCOUNT_CHANGED,
+            event_type=BillingSessionEventType.DISCOUNT_CHANGED,
             event_time=timezone_now(),
             extra_data={
                 "old_monthly_discounted_price": old_monthly_discounted_price,
@@ -1359,7 +1365,7 @@ class BillingSession(ABC):
         customer.save(update_fields=["minimum_licenses"])
 
         self.write_to_audit_log(
-            event_type=AuditLogEventType.CUSTOMER_PROPERTY_CHANGED,
+            event_type=BillingSessionEventType.CUSTOMER_PROPERTY_CHANGED,
             event_time=timezone_now(),
             extra_data={
                 "old_value": previous_minimum_license_count,
@@ -1398,7 +1404,7 @@ class BillingSession(ABC):
             )
 
         self.write_to_audit_log(
-            event_type=AuditLogEventType.CUSTOMER_PROPERTY_CHANGED,
+            event_type=BillingSessionEventType.CUSTOMER_PROPERTY_CHANGED,
             event_time=timezone_now(),
             extra_data={
                 "old_value": previous_required_plan_tier,
@@ -1410,6 +1416,28 @@ class BillingSession(ABC):
         if new_plan_tier is not None:
             plan_tier_name = CustomerPlan.name_from_tier(new_plan_tier)
         return f"Required plan tier for {self.billing_entity_display_name} set to {plan_tier_name}."
+
+    def configure_temporary_courtesy_plan(self, end_date_string: str) -> str:
+        plan_end_date = datetime.strptime(end_date_string, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if plan_end_date.date() <= timezone_now().date():
+            raise SupportRequestError(
+                f"Cannot configure a courtesy plan for {self.billing_entity_display_name} to end on {end_date_string}."
+            )
+        customer = self.get_customer()
+        if customer is not None:
+            plan = get_current_plan_by_customer(customer)
+            if plan is not None:
+                raise SupportRequestError(
+                    f"Cannot configure a courtesy plan for {self.billing_entity_display_name} because of current plan."
+                )
+        plan_anchor_date = timezone_now()
+        if isinstance(self, RealmBillingSession):
+            raise SupportRequestError(
+                f"Cannot currently configure a courtesy plan for {self.billing_entity_display_name}."
+            )  # nocoverage
+
+        self.migrate_customer_to_legacy_plan(plan_anchor_date, plan_end_date)
+        return f"Temporary courtesy plan for {self.billing_entity_display_name} configured to end on {end_date_string}."
 
     def configure_fixed_price_plan(self, fixed_price: int, sent_invoice_id: str | None) -> str:
         customer = self.get_customer()
@@ -1458,7 +1486,7 @@ class BillingSession(ABC):
                 **fixed_price_plan_params,
             )
             self.write_to_audit_log(
-                event_type=AuditLogEventType.CUSTOMER_PLAN_CREATED,
+                event_type=BillingSessionEventType.CUSTOMER_PLAN_CREATED,
                 event_time=timezone_now(),
                 extra_data=fixed_price_plan_params,
             )
@@ -1493,7 +1521,7 @@ class BillingSession(ABC):
             **fixed_price_plan_params,
         )
         self.write_to_audit_log(
-            event_type=AuditLogEventType.CUSTOMER_PLAN_CREATED,
+            event_type=BillingSessionEventType.CUSTOMER_PLAN_CREATED,
             event_time=timezone_now(),
             extra_data=fixed_price_plan_params,
         )
@@ -1506,7 +1534,7 @@ class BillingSession(ABC):
         customer.sponsorship_pending = sponsorship_pending
         customer.save(update_fields=["sponsorship_pending"])
         self.write_to_audit_log(
-            event_type=AuditLogEventType.SPONSORSHIP_PENDING_STATUS_CHANGED,
+            event_type=BillingSessionEventType.SPONSORSHIP_PENDING_STATUS_CHANGED,
             event_time=timezone_now(),
             extra_data={"sponsorship_pending": sponsorship_pending},
         )
@@ -1527,7 +1555,7 @@ class BillingSession(ABC):
                 plan.charge_automatically = charge_automatically
                 plan.save(update_fields=["charge_automatically"])
                 self.write_to_audit_log(
-                    event_type=AuditLogEventType.BILLING_MODALITY_CHANGED,
+                    event_type=BillingSessionEventType.BILLING_MODALITY_CHANGED,
                     event_time=timezone_now(),
                     extra_data={"charge_automatically": charge_automatically},
                 )
@@ -1586,7 +1614,7 @@ class BillingSession(ABC):
                 def write_to_audit_log_plan_property_changed(extra_data: dict[str, Any]) -> None:
                     extra_data["plan_id"] = plan.id
                     self.write_to_audit_log(
-                        event_type=AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED,
+                        event_type=BillingSessionEventType.CUSTOMER_PLAN_PROPERTY_CHANGED,
                         event_time=timezone_now(),
                         extra_data=extra_data,
                     )
@@ -1858,7 +1886,7 @@ class BillingSession(ABC):
             )
 
             self.write_to_audit_log(
-                event_type=AuditLogEventType.CUSTOMER_PLAN_CREATED,
+                event_type=BillingSessionEventType.CUSTOMER_PLAN_CREATED,
                 event_time=event_time,
                 extra_data=plan_params,
             )
@@ -2066,7 +2094,7 @@ class BillingSession(ABC):
 
         if schedule == CustomerPlan.BILLING_SCHEDULE_ANNUAL:
             self.write_to_audit_log(
-                event_type=AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN,
+                event_type=BillingSessionEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN,
                 event_time=timezone_now(),
                 extra_data={
                     "monthly_plan_id": plan.id,
@@ -2075,7 +2103,7 @@ class BillingSession(ABC):
             )
         else:
             self.write_to_audit_log(
-                event_type=AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN,
+                event_type=BillingSessionEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN,
                 event_time=timezone_now(),
                 extra_data={
                     "annual_plan_id": plan.id,
@@ -2221,7 +2249,7 @@ class BillingSession(ABC):
                 )
 
                 self.write_to_audit_log(
-                    event_type=AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN,
+                    event_type=BillingSessionEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN,
                     event_time=event_time,
                     extra_data={
                         "monthly_plan_id": plan.id,
@@ -2266,7 +2294,7 @@ class BillingSession(ABC):
                 )
 
                 self.write_to_audit_log(
-                    event_type=AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN,
+                    event_type=BillingSessionEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN,
                     event_time=event_time,
                     extra_data={
                         "annual_plan_id": plan.id,
@@ -3384,6 +3412,10 @@ class BillingSession(ABC):
             new_fixed_price = support_request["fixed_price"]
             sent_invoice_id = support_request["sent_invoice_id"]
             success_message = self.configure_fixed_price_plan(new_fixed_price, sent_invoice_id)
+        elif support_type == SupportType.configure_temporary_courtesy_plan:
+            assert support_request["plan_end_date"] is not None
+            temporary_plan_end_date = support_request["plan_end_date"]
+            success_message = self.configure_temporary_courtesy_plan(temporary_plan_end_date)
         elif support_type == SupportType.update_billing_modality:
             assert support_request["billing_modality"] is not None
             assert support_request["billing_modality"] in VALID_BILLING_MODALITY_VALUES
@@ -3653,7 +3685,7 @@ class BillingSession(ABC):
         legacy_plan.invoiced_through = ledger_entry
         legacy_plan.save(update_fields=["invoiced_through"])
         self.write_to_audit_log(
-            event_type=AuditLogEventType.CUSTOMER_PLAN_CREATED,
+            event_type=BillingSessionEventType.CUSTOMER_PLAN_CREATED,
             event_time=legacy_plan_anchor,
             extra_data=legacy_plan_params,
         )
@@ -3708,7 +3740,7 @@ class BillingSession(ABC):
         community_plan.invoiced_through = ledger_entry
         community_plan.save(update_fields=["invoiced_through"])
         self.write_to_audit_log(
-            event_type=AuditLogEventType.CUSTOMER_PLAN_CREATED,
+            event_type=BillingSessionEventType.CUSTOMER_PLAN_CREATED,
             event_time=now,
             extra_data=community_plan_params,
         )
@@ -3794,36 +3826,36 @@ class RealmBillingSession(BillingSession):
         return get_latest_seat_count(self.realm)
 
     @override
-    def get_audit_log_event(self, event_type: AuditLogEventType) -> int:
-        if event_type is AuditLogEventType.STRIPE_CUSTOMER_CREATED:
-            return RealmAuditLog.STRIPE_CUSTOMER_CREATED
-        elif event_type is AuditLogEventType.STRIPE_CARD_CHANGED:
-            return RealmAuditLog.STRIPE_CARD_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_CREATED:
-            return RealmAuditLog.CUSTOMER_PLAN_CREATED
-        elif event_type is AuditLogEventType.DISCOUNT_CHANGED:
-            return RealmAuditLog.REALM_DISCOUNT_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PROPERTY_CHANGED:
-            return RealmAuditLog.CUSTOMER_PROPERTY_CHANGED
-        elif event_type is AuditLogEventType.SPONSORSHIP_APPROVED:
-            return RealmAuditLog.REALM_SPONSORSHIP_APPROVED
-        elif event_type is AuditLogEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
-            return RealmAuditLog.REALM_SPONSORSHIP_PENDING_STATUS_CHANGED
-        elif event_type is AuditLogEventType.BILLING_MODALITY_CHANGED:
-            return RealmAuditLog.REALM_BILLING_MODALITY_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
-            return RealmAuditLog.CUSTOMER_PLAN_PROPERTY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN:
-            return RealmAuditLog.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
-        elif event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN:
-            return RealmAuditLog.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
+    def get_audit_log_event(self, event_type: BillingSessionEventType) -> int:
+        if event_type is BillingSessionEventType.STRIPE_CUSTOMER_CREATED:
+            return AuditLogEventType.STRIPE_CUSTOMER_CREATED
+        elif event_type is BillingSessionEventType.STRIPE_CARD_CHANGED:
+            return AuditLogEventType.STRIPE_CARD_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_CREATED:
+            return AuditLogEventType.CUSTOMER_PLAN_CREATED
+        elif event_type is BillingSessionEventType.DISCOUNT_CHANGED:
+            return AuditLogEventType.REALM_DISCOUNT_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PROPERTY_CHANGED
+        elif event_type is BillingSessionEventType.SPONSORSHIP_APPROVED:
+            return AuditLogEventType.REALM_SPONSORSHIP_APPROVED
+        elif event_type is BillingSessionEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
+            return AuditLogEventType.REALM_SPONSORSHIP_PENDING_STATUS_CHANGED
+        elif event_type is BillingSessionEventType.BILLING_MODALITY_CHANGED:
+            return AuditLogEventType.REALM_BILLING_MODALITY_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN:
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
+        elif event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN:
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
         else:
             raise BillingSessionAuditLogEventError(event_type)
 
     @override
     def write_to_audit_log(
         self,
-        event_type: AuditLogEventType,
+        event_type: BillingSessionEventType,
         event_time: datetime,
         *,
         background_update: bool = False,
@@ -3946,12 +3978,15 @@ class RealmBillingSession(BillingSession):
 
         from zerver.actions.message_send import internal_send_private_message
 
+        if self.realm.deactivated:
+            raise SupportRequestError("Realm has been deactivated")
+
         self.do_change_plan_type(tier=None, is_sponsored=True)
         if customer is not None and customer.sponsorship_pending:
             customer.sponsorship_pending = False
             customer.save(update_fields=["sponsorship_pending"])
             self.write_to_audit_log(
-                event_type=AuditLogEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
+                event_type=BillingSessionEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
             )
         notification_bot = get_system_bot(settings.NOTIFICATION_BOT, self.realm.id)
         for user in self.realm.get_human_billing_admin_and_realm_owner_users():
@@ -3969,7 +4004,7 @@ class RealmBillingSession(BillingSession):
                     end_link="](/help/linking-to-zulip-website)",
                 )
                 internal_send_private_message(notification_bot, user, message)
-        return f"Sponsorship approved for {self.billing_entity_display_name}"
+        return f"Sponsorship approved for {self.billing_entity_display_name}; Emailed organization owners and billing admins."
 
     @override
     def is_sponsored(self) -> bool:
@@ -4167,42 +4202,42 @@ class RemoteRealmBillingSession(BillingSession):
         )
 
     @override
-    def get_audit_log_event(self, event_type: AuditLogEventType) -> int:
-        if event_type is AuditLogEventType.STRIPE_CUSTOMER_CREATED:
-            return RemoteRealmAuditLog.STRIPE_CUSTOMER_CREATED
-        elif event_type is AuditLogEventType.STRIPE_CARD_CHANGED:
-            return RemoteRealmAuditLog.STRIPE_CARD_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_CREATED:
-            return RemoteRealmAuditLog.CUSTOMER_PLAN_CREATED
-        elif event_type is AuditLogEventType.DISCOUNT_CHANGED:
-            return RemoteRealmAuditLog.REMOTE_SERVER_DISCOUNT_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PROPERTY_CHANGED:
-            return RemoteRealmAuditLog.CUSTOMER_PROPERTY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.SPONSORSHIP_APPROVED:
-            return RemoteRealmAuditLog.REMOTE_SERVER_SPONSORSHIP_APPROVED
-        elif event_type is AuditLogEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
-            return RemoteRealmAuditLog.REMOTE_SERVER_SPONSORSHIP_PENDING_STATUS_CHANGED
-        elif event_type is AuditLogEventType.BILLING_MODALITY_CHANGED:
-            return RemoteRealmAuditLog.REMOTE_SERVER_BILLING_MODALITY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
-            return RemoteRealmAuditLog.CUSTOMER_PLAN_PROPERTY_CHANGED
-        elif event_type is AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED:
-            return RemoteRealmAuditLog.REMOTE_SERVER_PLAN_TYPE_CHANGED
+    def get_audit_log_event(self, event_type: BillingSessionEventType) -> int:
+        if event_type is BillingSessionEventType.STRIPE_CUSTOMER_CREATED:
+            return AuditLogEventType.STRIPE_CUSTOMER_CREATED
+        elif event_type is BillingSessionEventType.STRIPE_CARD_CHANGED:
+            return AuditLogEventType.STRIPE_CARD_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_CREATED:
+            return AuditLogEventType.CUSTOMER_PLAN_CREATED
+        elif event_type is BillingSessionEventType.DISCOUNT_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_DISCOUNT_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PROPERTY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.SPONSORSHIP_APPROVED:
+            return AuditLogEventType.REMOTE_SERVER_SPONSORSHIP_APPROVED
+        elif event_type is BillingSessionEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_SPONSORSHIP_PENDING_STATUS_CHANGED
+        elif event_type is BillingSessionEventType.BILLING_MODALITY_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_BILLING_MODALITY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED
+        elif event_type is BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_PLAN_TYPE_CHANGED
         elif (
-            event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
+            event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
         ):  # nocoverage
-            return RemoteRealmAuditLog.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
         elif (
-            event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
+            event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
         ):  # nocoverage
-            return RemoteRealmAuditLog.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
         else:  # nocoverage
             raise BillingSessionAuditLogEventError(event_type)
 
     @override
     def write_to_audit_log(
         self,
-        event_type: AuditLogEventType,
+        event_type: BillingSessionEventType,
         event_time: datetime,
         *,
         background_update: bool = False,
@@ -4310,7 +4345,7 @@ class RemoteRealmBillingSession(BillingSession):
         self.remote_realm.plan_type = plan_type
         self.remote_realm.save(update_fields=["plan_type"])
         self.write_to_audit_log(
-            event_type=AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
+            event_type=BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
             event_time=timezone_now(),
             extra_data={"old_value": old_plan_type, "new_value": plan_type},
             background_update=background_update,
@@ -4341,7 +4376,7 @@ class RemoteRealmBillingSession(BillingSession):
             customer.sponsorship_pending = False
             customer.save(update_fields=["sponsorship_pending"])
             self.write_to_audit_log(
-                event_type=AuditLogEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
+                event_type=BillingSessionEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
             )
         emailed_string = ""
         billing_emails = list(
@@ -4397,7 +4432,7 @@ class RemoteRealmBillingSession(BillingSession):
             self.remote_realm.plan_type = new_plan_type
             self.remote_realm.save(update_fields=["plan_type"])
             self.write_to_audit_log(
-                event_type=AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
+                event_type=BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
                 event_time=timezone_now(),
                 extra_data={"old_value": old_plan_type, "new_value": new_plan_type},
                 background_update=background_update,
@@ -4610,42 +4645,42 @@ class RemoteServerBillingSession(BillingSession):
         )
 
     @override
-    def get_audit_log_event(self, event_type: AuditLogEventType) -> int:
-        if event_type is AuditLogEventType.STRIPE_CUSTOMER_CREATED:
-            return RemoteZulipServerAuditLog.STRIPE_CUSTOMER_CREATED
-        elif event_type is AuditLogEventType.STRIPE_CARD_CHANGED:
-            return RemoteZulipServerAuditLog.STRIPE_CARD_CHANGED
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_CREATED:
-            return RemoteZulipServerAuditLog.CUSTOMER_PLAN_CREATED
-        elif event_type is AuditLogEventType.DISCOUNT_CHANGED:
-            return RemoteZulipServerAuditLog.REMOTE_SERVER_DISCOUNT_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.CUSTOMER_PROPERTY_CHANGED:
-            return RemoteZulipServerAuditLog.CUSTOMER_PROPERTY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.SPONSORSHIP_APPROVED:
-            return RemoteZulipServerAuditLog.REMOTE_SERVER_SPONSORSHIP_APPROVED
-        elif event_type is AuditLogEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
-            return RemoteZulipServerAuditLog.REMOTE_SERVER_SPONSORSHIP_PENDING_STATUS_CHANGED
-        elif event_type is AuditLogEventType.BILLING_MODALITY_CHANGED:
-            return RemoteZulipServerAuditLog.REMOTE_SERVER_BILLING_MODALITY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
-            return RemoteZulipServerAuditLog.CUSTOMER_PLAN_PROPERTY_CHANGED  # nocoverage
-        elif event_type is AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED:
-            return RemoteZulipServerAuditLog.REMOTE_SERVER_PLAN_TYPE_CHANGED
+    def get_audit_log_event(self, event_type: BillingSessionEventType) -> int:
+        if event_type is BillingSessionEventType.STRIPE_CUSTOMER_CREATED:
+            return AuditLogEventType.STRIPE_CUSTOMER_CREATED
+        elif event_type is BillingSessionEventType.STRIPE_CARD_CHANGED:
+            return AuditLogEventType.STRIPE_CARD_CHANGED
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_CREATED:
+            return AuditLogEventType.CUSTOMER_PLAN_CREATED
+        elif event_type is BillingSessionEventType.DISCOUNT_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_DISCOUNT_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.CUSTOMER_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PROPERTY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.SPONSORSHIP_APPROVED:
+            return AuditLogEventType.REMOTE_SERVER_SPONSORSHIP_APPROVED
+        elif event_type is BillingSessionEventType.SPONSORSHIP_PENDING_STATUS_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_SPONSORSHIP_PENDING_STATUS_CHANGED
+        elif event_type is BillingSessionEventType.BILLING_MODALITY_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_BILLING_MODALITY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.CUSTOMER_PLAN_PROPERTY_CHANGED:
+            return AuditLogEventType.CUSTOMER_PLAN_PROPERTY_CHANGED  # nocoverage
+        elif event_type is BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED:
+            return AuditLogEventType.REMOTE_SERVER_PLAN_TYPE_CHANGED
         elif (
-            event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
+            event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
         ):  # nocoverage
-            return RemoteZulipServerAuditLog.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_MONTHLY_TO_ANNUAL_PLAN
         elif (
-            event_type is AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
+            event_type is BillingSessionEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
         ):  # nocoverage
-            return RemoteZulipServerAuditLog.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
+            return AuditLogEventType.CUSTOMER_SWITCHED_FROM_ANNUAL_TO_MONTHLY_PLAN
         else:  # nocoverage
             raise BillingSessionAuditLogEventError(event_type)
 
     @override
     def write_to_audit_log(
         self,
-        event_type: AuditLogEventType,
+        event_type: BillingSessionEventType,
         event_time: datetime,
         *,
         background_update: bool = False,
@@ -4749,7 +4784,7 @@ class RemoteServerBillingSession(BillingSession):
         self.remote_server.plan_type = plan_type
         self.remote_server.save(update_fields=["plan_type"])
         self.write_to_audit_log(
-            event_type=AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
+            event_type=BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
             event_time=timezone_now(),
             extra_data={"old_value": old_plan_type, "new_value": plan_type},
             background_update=background_update,
@@ -4790,7 +4825,7 @@ class RemoteServerBillingSession(BillingSession):
             customer.sponsorship_pending = False
             customer.save(update_fields=["sponsorship_pending"])
             self.write_to_audit_log(
-                event_type=AuditLogEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
+                event_type=BillingSessionEventType.SPONSORSHIP_APPROVED, event_time=timezone_now()
             )
         billing_emails = list(
             RemoteServerBillingUser.objects.filter(remote_server=self.remote_server).values_list(
@@ -4824,7 +4859,7 @@ class RemoteServerBillingSession(BillingSession):
             self.remote_server.plan_type = new_plan_type
             self.remote_server.save(update_fields=["plan_type"])
             self.write_to_audit_log(
-                event_type=AuditLogEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
+                event_type=BillingSessionEventType.BILLING_ENTITY_PLAN_TYPE_CHANGED,
                 event_time=timezone_now(),
                 extra_data={"old_value": old_plan_type, "new_value": new_plan_type},
                 background_update=background_update,
@@ -5133,7 +5168,7 @@ def do_reactivate_remote_server(remote_server: RemoteZulipServer) -> None:
     remote_server.deactivated = False
     remote_server.save(update_fields=["deactivated"])
     RemoteZulipServerAuditLog.objects.create(
-        event_type=RealmAuditLog.REMOTE_SERVER_REACTIVATED,
+        event_type=AuditLogEventType.REMOTE_SERVER_REACTIVATED,
         server=remote_server,
         event_time=timezone_now(),
     )
@@ -5183,7 +5218,7 @@ def do_deactivate_remote_server(
     remote_server.deactivated = True
     remote_server.save(update_fields=["deactivated"])
     RemoteZulipServerAuditLog.objects.create(
-        event_type=RealmAuditLog.REMOTE_SERVER_DEACTIVATED,
+        event_type=AuditLogEventType.REMOTE_SERVER_DEACTIVATED,
         server=remote_server,
         event_time=timezone_now(),
     )

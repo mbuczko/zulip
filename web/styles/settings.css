@@ -54,67 +54,6 @@ h3,
     }
 }
 
-.new-style {
-    .block {
-        display: block;
-    }
-
-    .center-block {
-        margin: 0 auto;
-    }
-
-    .center {
-        text-align: center;
-    }
-
-    .w-200 {
-        width: 200px;
-    }
-
-    .grid {
-        & label {
-            min-width: 200px;
-        }
-
-        .warning {
-            display: inline-block;
-            vertical-align: top;
-            width: 150px;
-            padding: 5px 10px;
-            text-align: left;
-        }
-    }
-
-    #account-settings,
-    #profile-field-settings {
-        .grid {
-            & label {
-                min-width: 120px;
-            }
-
-            .warning {
-                display: block;
-                width: calc(100% - 20px - 5px);
-                text-align: right;
-            }
-        }
-    }
-
-    .warning {
-        #pw_strength {
-            width: 140px;
-            height: 8px;
-            margin: 6px 0 0;
-        }
-    }
-
-    .button {
-        & ul {
-            text-align: left;
-        }
-    }
-}
-
 .profile-settings-form {
     display: flex;
     justify-content: space-between;
@@ -195,8 +134,10 @@ h3,
 .setting_notification_sound,
 .play_notification_sound {
     margin-right: 4px;
+}
 
-    & i {
+.play_notification_sound {
+    .notification-sound-icon {
         font-size: 22px;
         /* Visually center with chevron in select */
         line-height: 26px;
@@ -551,8 +492,8 @@ input[type="checkbox"] {
     }
 }
 
-.organization-settings-parent > div:first-of-type {
-    margin-top: 10px;
+.organization-settings-parent {
+    padding-top: 10px;
 }
 
 #id_org_profile_preview {
@@ -563,8 +504,8 @@ input[type="checkbox"] {
     margin-bottom: 20px;
 }
 
-.inline-block.organization-permissions-parent div:first-of-type {
-    margin-top: 10px;
+.inline-block.organization-permissions-parent {
+    padding-top: 10px;
 }
 
 .language_selection_widget .language_selection_button {
@@ -575,6 +516,18 @@ input[type="checkbox"] {
     .fa.fa-pencil {
         margin-left: 5px;
     }
+}
+
+#user_enter_sends_label kbd,
+#realm_enter_sends_label kbd {
+    /* 14px at 15px/1em */
+    font-size: 0.9333em;
+    font-style: normal;
+    font-weight: 500;
+    color: hsl(0deg 0% 40%);
+    position: relative;
+    bottom: 1px;
+    margin: 0 2px;
 }
 
 .edit-attachment-buttons {
@@ -835,37 +788,19 @@ input[type="checkbox"] {
 
 .admin_profile_fields_table,
 .edit_profile_field_choices_container,
-.profile_field_choices_table {
-    .movable-row {
-        cursor: move;
-
-        .fa-ellipsis-v {
-            color: hsl(0deg 0% 75%);
-            position: relative;
-            top: 1px;
-
-            + i {
-                margin-right: 5px;
-            }
-        }
-    }
-}
-
+.profile_field_choices_table,
 .admin_linkifiers_table {
     .movable-row {
         .move-handle {
             cursor: move;
             user-select: none;
+            margin-right: 5px;
         }
 
         .fa-ellipsis-v {
             color: hsl(0deg 0% 75%);
             position: relative;
             top: 1px;
-
-            + i {
-                margin-right: 5px;
-            }
         }
     }
 }
@@ -1419,13 +1354,7 @@ $option_title_width: 180px;
             border-bottom: 1px solid hsl(0deg 0% 87%);
         }
 
-        & ul {
-            list-style: none;
-            margin: 0;
-            padding: 0;
-        }
-
-        & li {
+        .sidebar-item {
             display: grid;
             /* 3.5714em is 50px at 14px/1em -- the legacy height of these rows. */
             grid-template:
@@ -1451,7 +1380,7 @@ $option_title_width: 180px;
                 border-bottom: 1px solid transparent;
             }
 
-            .icon {
+            .sidebar-item-icon {
                 font-size: 1.4em;
                 text-align: center;
                 color: hsl(0deg 0% 53%);
@@ -1473,6 +1402,16 @@ $option_title_width: 180px;
             }
         }
 
+        .collapse-settings-button,
+        .collapse-settings-button > #toggle_collapse_chevron {
+            color: var(--color-text-url);
+
+            &:hover {
+                cursor: pointer;
+                color: var(--color-text-url-hover);
+            }
+        }
+
         .org-settings-list {
             display: none;
         }
@@ -1484,6 +1423,9 @@ $option_title_width: 180px;
         .normal-settings-list,
         .org-settings-list {
             position: relative;
+            list-style: none;
+            margin: 0;
+            padding: 0;
         }
     }
 
@@ -1631,11 +1573,11 @@ $option_title_width: 180px;
         width: 100%;
         top: 20px;
         position: sticky;
-    }
 
-    #show_my_user_profile_modal i {
-        padding-left: 2px;
-        vertical-align: middle;
+        .show-user-profile-icon {
+            padding-left: 2px;
+            vertical-align: middle;
+        }
     }
 }
 
@@ -1762,21 +1704,6 @@ $option_title_width: 180px;
     display: inline-block;
 }
 
-.collapse-settings-btn {
-    margin: 10px 0 0 10px;
-    color: hsl(200deg 100% 40%);
-
-    &:hover {
-        cursor: pointer;
-        color: hsl(208deg 56% 38%);
-    }
-}
-
-#toggle_collapse {
-    margin-left: 2px;
-    display: inline-block;
-}
-
 .admin_exports_table {
     margin-bottom: 20px;
 }
@@ -1821,10 +1748,6 @@ $option_title_width: 180px;
     .user-avatar-section,
     .realm-icon-section {
         display: block;
-    }
-
-    #settings_content .warning {
-        display: none;
     }
 
     .subsection-failed-status p {

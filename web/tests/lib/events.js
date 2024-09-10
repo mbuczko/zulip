@@ -263,13 +263,6 @@ exports.fixtures = {
         value: 1,
     },
 
-    realm__update__create_web_public_stream_policy: {
-        type: "realm",
-        op: "update",
-        property: "create_web_public_stream_policy",
-        value: 2,
-    },
-
     realm__update__default_code_block_language: {
         type: "realm",
         op: "update",
@@ -820,6 +813,7 @@ exports.fixtures = {
             members: [1],
             is_system_group: false,
             direct_subgroup_ids: [2],
+            can_manage_group: 16,
             can_mention_group: 11,
         },
     },

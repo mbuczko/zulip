@@ -20,10 +20,89 @@ format used by the Zulip server that they are interacting with.
 
 ## Changes in Zulip 10.0
 
+**Feature level 287**
+
+* [Markdown message
+  formatting](/api/message-formatting#image-previews): Added
+  `data-original-dimensions` attributes to placeholder images
+  (`image-loading-placeholder`), containing the dimensions of the
+  original image. This change was also backported to the Zulip 9.x
+  series, at feature level 278.
+
+**Feature level 286**
+
+* [`POST /user_uploads`](/api/upload-file): Added `filename` field to
+  the response, which is closer to the original filename than the
+  basename of the `url` field in the response.
+
+**Feature level 285**
+
+* [`PATCH /messages/{message_id}`](/api/update-message): Added
+  `detached_uploads` to the response, indicating which uploaded files
+  are now only accessible via message edit history.
+
+**Feature level 284**
+
+* [`GET /events`](/api/get-events), [`GET /messages`](/api/get-messages),
+  [`GET /messages/{message_id}`](/api/get-message),
+  [`POST /zulip-outgoing-webhook`](/api/zulip-outgoing-webhooks): Removed
+  the `prev_rendered_content_version` field from the `edit_history` object
+  within message objects and the `update_message` event type as it is an
+  internal server implementation detail not used by any client.
+
+**Feature level 283**
+
+* [`GET /events`](/api/get-events), [`POST /register`](/api/register-queue),
+  [`GET /user_groups`](/api/get-user-groups): Add `can_manage_group` to
+  user group objects.
+* [`POST /user_groups/create`](/api/create-user-group): Added `can_manage_group`
+  parameter to support setting the user group whose members can manage the user
+  group.
+* [`PATCH /user_groups/{user_group_id}`](/api/update-user-group): Added
+  `can_manage_group` parameter to support changing the user group whose
+  members can manage the specified user group.
+
+**Feature level 282**
+
+* `POST users/me/tutorial_status`: Removed this undocumented endpoint,
+  as the state that it maintained has been replaced by a cleaner
+  `onboarding_steps` implementation.
+
+**Feature level 281**
+
+* [`GET /events`](/api/get-events), [`POST /register`](/api/register-queue):
+  Added a new realm setting `realm_can_delete_any_message_group` which is a
+  [group-setting value](/api/group-setting-values) describing the set of
+  users with permission to delete any message in the organization.
+
+**Feature level 280**
+
+* `PATCH /realm`, [`POST /register`](/api/register-queue),
+  [`GET /events`](/api/get-events): Added `can_create_web_public_channel_group`
+  realm setting, which is a [group-setting value](/api/group-setting-values)
+  describing the set of users with permission to create web-public channels.
+* `PATCH /realm`, [`GET /events`](/api/get-events): Removed
+  `create_web_public_stream_policy` property, as the permission to create
+  web-public channels is now controlled by `can_create_web_public_channel_group`
+  setting.
+* [`POST /register`](/api/register-queue): `realm_create_web_public_stream_policy`
+  field is deprecated, having been replaced by `can_create_web_public_channel_group`.
+  Notably, this backwards-compatible `realm_create_web_public_stream_policy` value
+  now contains the superset of the true value that best approximates the actual
+  permission setting.
+
 Feature levels 278-279 are reserved for future use in 9.x maintenance
 releases.
 
 ## Changes in Zulip 9.0
+
+**Feature level 278**
+
+* [Markdown message
+  formatting](/api/message-formatting#image-previews): Added
+  `data-original-dimensions` attributes to placeholder images
+  (`image-loading-placeholder`), containing the dimensions of the
+  original image. Backported change from feature level 287.
 
 **Feature level 277**
 
@@ -894,8 +973,8 @@ No changes; feature level used for Zulip 7.0 release.
 
 **Feature level 182**
 
-* `POST /export/realm`: This endpoint now returns the ID of the data
-  export object created by the request.
+* [`POST /export/realm`](/api/export-realm): This endpoint now returns the ID
+  of the data export object created by the request.
 
 **Feature level 181**
 
@@ -2441,7 +2520,10 @@ No changes; feature level used for Zulip 3.0 release.
   window cached in a client.
 * Added `is_web_public` field to Stream objects.  This field is
   intended to support web-public streams.
-* Added `/export/realm` endpoints for triggering a data export.
+* [`GET /export/realm`](/api/get-realm-exports): Added endpoint for
+  fetching public data exports.
+  [`POST /export/realm`](/api/export-realm): Added endpoint for
+  triggering a public data export.
 * `PATCH /realm`: Added `invite_to_stream_policy`,
   `create_stream_policy`, `digest_emails_enabled`, `digest_weekday`,
   `user_group_edit_policy`, and `avatar_changes_disabled` organization settings.

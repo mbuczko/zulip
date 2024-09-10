@@ -79,6 +79,7 @@ from zerver.models import (
     UserMessage,
     UserProfile,
 )
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_realm
 from zerver.models.recipients import get_direct_message_group_user_ids
 from zerver.models.streams import get_stream
@@ -1448,7 +1449,7 @@ class RealmCreationTest(ZulipTestCase):
         self.assertEqual("new organizations", messages[0].topic_name())
 
         realm_creation_audit_log = RealmAuditLog.objects.get(
-            realm=realm, event_type=RealmAuditLog.REALM_CREATED
+            realm=realm, event_type=AuditLogEventType.REALM_CREATED
         )
         self.assertEqual(realm_creation_audit_log.acting_user, user)
         self.assertEqual(realm_creation_audit_log.event_time, realm.date_created)
@@ -2823,7 +2824,6 @@ class UserSignUpTest(ZulipTestCase):
         hamlet_in_zulip.emojiset = "twitter"
         hamlet_in_zulip.high_contrast_mode = True
         hamlet_in_zulip.enter_sends = True
-        hamlet_in_zulip.tutorial_status = UserProfile.TUTORIAL_FINISHED
         hamlet_in_zulip.email_address_visibility = UserProfile.EMAIL_ADDRESS_VISIBILITY_EVERYONE
         hamlet_in_zulip.save()
 
@@ -2845,7 +2845,6 @@ class UserSignUpTest(ZulipTestCase):
         self.assertEqual(hamlet.high_contrast_mode, False)
         self.assertEqual(hamlet.enable_stream_audible_notifications, False)
         self.assertEqual(hamlet.enter_sends, False)
-        self.assertEqual(hamlet.tutorial_status, UserProfile.TUTORIAL_WAITING)
 
     def test_signup_with_user_settings_from_another_realm(self) -> None:
         hamlet_in_zulip = self.example_user("hamlet")
@@ -2863,7 +2862,6 @@ class UserSignUpTest(ZulipTestCase):
         hamlet_in_zulip.emojiset = "twitter"
         hamlet_in_zulip.high_contrast_mode = True
         hamlet_in_zulip.enter_sends = True
-        hamlet_in_zulip.tutorial_status = UserProfile.TUTORIAL_FINISHED
         hamlet_in_zulip.email_address_visibility = UserProfile.EMAIL_ADDRESS_VISIBILITY_EVERYONE
         hamlet_in_zulip.save()
 
@@ -2909,7 +2907,6 @@ class UserSignUpTest(ZulipTestCase):
         self.assertEqual(hamlet_in_lear.high_contrast_mode, True)
         self.assertEqual(hamlet_in_lear.enter_sends, True)
         self.assertEqual(hamlet_in_lear.enable_stream_audible_notifications, False)
-        self.assertEqual(hamlet_in_lear.tutorial_status, UserProfile.TUTORIAL_FINISHED)
         self.assertEqual(
             hamlet_in_lear.email_address_visibility, UserProfile.EMAIL_ADDRESS_VISIBILITY_NOBODY
         )

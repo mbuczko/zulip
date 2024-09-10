@@ -32,6 +32,7 @@ import * as people from "./people";
 import * as popover_menus from "./popover_menus";
 import {hide_all} from "./popovers";
 import * as rows from "./rows";
+import * as settings_panel_menu from "./settings_panel_menu";
 import * as sidebar_ui from "./sidebar_ui";
 import {current_user, realm} from "./state_data";
 import * as timerender from "./timerender";
@@ -189,6 +190,19 @@ export function toggle_user_card_popover(element, user) {
     );
 }
 
+function toggle_user_card_popover_for_bot_owner(element, user) {
+    show_user_card_popover(
+        user,
+        $(element),
+        false,
+        false,
+        "compose_private_message",
+        "user_card",
+        "right",
+        true,
+    );
+}
+
 function get_user_card_popover_data(
     user,
     has_message_context,
@@ -228,7 +242,7 @@ function get_user_card_popover_data(
     // Filtering out only those profile fields that can be display in the popover and are not empty.
     const field_types = realm.custom_profile_field_types;
     const display_profile_fields = realm.custom_profile_fields
-        .map((f) => user_profile.get_custom_profile_field_data(user, f, field_types))
+        .flatMap((f) => user_profile.get_custom_profile_field_data(user, f, field_types) ?? [])
         .filter((f) => f.display_in_profile_summary && f.value !== undefined && f.value !== null);
 
     const user_id_string = user.user_id.toString();
@@ -291,6 +305,7 @@ function show_user_card_popover(
     private_msg_class,
     template_class,
     popover_placement,
+    show_as_overlay,
     on_mount,
 ) {
     let popover_html;
@@ -349,6 +364,7 @@ function show_user_card_popover(
         },
         {
             show_as_overlay_on_mobile: true,
+            show_as_overlay_always: show_as_overlay,
         },
     );
 }
@@ -410,34 +426,46 @@ function load_medium_avatar(user, $elt) {
 
 // Functions related to message user card popover.
 
-// element is the target element to pop off of
-// user is the user whose profile to show
-// message is the message containing it, which should be selected
-function toggle_user_card_popover_for_message(element, user, message, on_mount) {
+// element is the target element to pop off of.
+// user is the user whose profile to show.
+// sender_id is the user id of the sender for the message we are
+// showing the popover from.
+function toggle_user_card_popover_for_message(
+    element,
+    user,
+    sender_id,
+    has_message_context,
+    on_mount,
+) {
     const $elt = $(element);
-    if (!message_user_card.is_open()) {
-        if (user === undefined) {
-            // This is never supposed to happen, not even for deactivated
-            // users, so we'll need to debug this error if it occurs.
-            blueslip.error("Bad sender in message", {
-                message_id: message.id,
-                sender_id: message.sender_id,
-            });
-            return;
-        }
 
-        const is_sender_popover = message.sender_id === user.user_id;
-        show_user_card_popover(
-            user,
-            $elt,
-            is_sender_popover,
-            true,
-            "respond_personal_button",
-            "message_user_card",
-            "right",
-            on_mount,
-        );
+    const is_sender_popover = sender_id === user.user_id;
+    show_user_card_popover(
+        user,
+        $elt,
+        is_sender_popover,
+        has_message_context,
+        "respond_personal_button",
+        "message_user_card",
+        "right",
+        false,
+        on_mount,
+    );
+}
+
+export function unsaved_message_user_mention_event_handler(e) {
+    e.stopPropagation();
+
+    const id_string = $(e.target).attr("data-user-id");
+    // Do not open popover for @all mention
+    if (id_string === "*") {
+        return;
     }
+
+    const user_id = Number.parseInt(id_string, 10);
+    const user = people.get_by_user_id(user_id);
+
+    toggle_user_card_popover_for_message($(e.target), user, current_user.user_id, false);
 }
 
 // This function serves as the entry point for toggling
@@ -462,7 +490,7 @@ export function toggle_sender_info() {
     assert(message_lists.current !== undefined);
     const message = message_lists.current.get(rows.id($message));
     const user = people.get_by_user_id(message.sender_id);
-    toggle_user_card_popover_for_message($sender[0], user, message, () => {
+    toggle_user_card_popover_for_message($sender[0], user, message.sender_id, true, () => {
         if (!page_params.is_spectator) {
             focus_user_card_popover_item();
         }
@@ -518,6 +546,7 @@ function toggle_sidebar_user_card_popover($target) {
         "compose_private_message",
         "user_sidebar",
         "left",
+        false,
         (instance) => {
             /* See comment in get_props_for_popover_centering for explanation of this. */
             $(instance.popper).find(".tippy-box").addClass("show-when-reference-hidden");
@@ -534,7 +563,7 @@ function register_click_handlers() {
         assert(message_lists.current !== undefined);
         const message = message_lists.current.get(rows.id($row));
         const user = people.get_by_user_id(message.sender_id);
-        toggle_user_card_popover_for_message(this, user, message);
+        toggle_user_card_popover_for_message(this, user, message.sender_id, true);
     });
 
     $("#main_div").on("click", ".user-mention", function (e) {
@@ -565,8 +594,12 @@ function register_click_handlers() {
                 return;
             }
         }
-        toggle_user_card_popover_for_message(this, user, message);
+        toggle_user_card_popover_for_message(this, user, message.sender_id, true);
     });
+
+    // Note: Message feeds and drafts have their own direct event listeners
+    // that run before this one and call stopPropagation.
+    $("body").on("click", ".messagebox .user-mention", unsaved_message_user_mention_event_handler);
 
     $("body").on("click", ".user-card-popover-actions .narrow_to_private_messages", (e) => {
         const user_id = elem_to_user_id($(e.target).parents("ul"));
@@ -692,19 +725,15 @@ function register_click_handlers() {
         e.preventDefault();
     });
 
-    $("body").on("click", ".view_bot_owner_user_profile", (e) => {
-        const user_id = Number.parseInt($(e.currentTarget).attr("data-user-id"), 10);
-        const user = people.get_by_user_id(user_id);
-        const $target = $(e.currentTarget).closest(".popover-menu-user-type");
-        toggle_user_card_popover($target, user);
-        e.stopPropagation();
-        e.preventDefault();
-    });
-
     $("body").on("click", ".view_user_profile, .person_picker .pill[data-user-id]", (e) => {
         const user_id = Number.parseInt($(e.currentTarget).attr("data-user-id"), 10);
         const user = people.get_by_user_id(user_id);
-        toggle_user_card_popover(e.target, user);
+        if ($(e.target).closest(".user-card-popover-bot-owner-field").length > 0) {
+            hide_all_user_card_popovers();
+            toggle_user_card_popover_for_bot_owner(e.target, user);
+        } else {
+            toggle_user_card_popover(e.target, user);
+        }
         e.stopPropagation();
         e.preventDefault();
     });
@@ -795,6 +824,12 @@ function register_click_handlers() {
         const user_id = elem_to_user_id($(e.target).parents("ul"));
         const user = people.get_by_user_id(user_id);
         user_profile.show_user_profile(user, "manage-profile-tab");
+    });
+
+    $("body").on("click", ".edit-your-profile", () => {
+        hide_all();
+        window.location.hash = "#settings/profile";
+        settings_panel_menu.mobile_activate_section();
     });
 
     new ClipboardJS(".copy-custom-profile-field-link", {

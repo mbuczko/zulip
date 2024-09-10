@@ -256,6 +256,10 @@ export function add_sub_to_table(sub) {
 }
 
 export function remove_stream(stream_id) {
+    if (!overlays.streams_open()) {
+        return;
+    }
+
     // It is possible that row is empty when we deactivate a
     // stream, but we let jQuery silently handle that.
     const $row = stream_ui_updates.row_for_stream_id(stream_id);
@@ -419,6 +423,17 @@ export function update_empty_left_panel_message() {
             $("#channels_overlay_container .stream-row:not(.notdisplayed)").length;
     } else {
         has_streams = stream_data.get_unsorted_subs().length;
+    }
+
+    const has_hidden_streams =
+        $("#channels_overlay_container .stream-row:not(.notdisplayed)").length === 0;
+    const has_search_query = $("#stream_filter input[type='text']").val().trim() !== "";
+    // Show "no channels match" text if all channels are hidden and there's a search query.
+    if (has_hidden_streams && has_search_query) {
+        $(".no-streams-to-show").children().hide();
+        $(".no_stream_match_filter_empty_text").show();
+        $(".no-streams-to-show").show();
+        return;
     }
     if (has_streams) {
         $(".no-streams-to-show").hide();
@@ -935,7 +950,7 @@ export function update_stream_privacy_choices(policy) {
     if (policy === "can_create_public_channel_group") {
         stream_settings_components.update_public_stream_privacy_option_state($container);
     }
-    if (policy === "create_web_public_stream_policy") {
+    if (policy === "can_create_web_public_channel_group") {
         stream_ui_updates.update_web_public_stream_privacy_option_state($container);
     }
 }

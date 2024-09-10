@@ -128,7 +128,7 @@ def update_message_backend(
     send_notification_to_new_thread: Json[bool] = True,
     content: str | None = None,
 ) -> HttpResponse:
-    number_changed = check_update_message(
+    updated_message_result = check_update_message(
         user_profile,
         message_id,
         stream_id,
@@ -142,14 +142,13 @@ def update_message_backend(
     # Include the number of messages changed in the logs
     log_data = RequestNotes.get_notes(request).log_data
     assert log_data is not None
-    log_data["extra"] = f"[{number_changed}]"
+    log_data["extra"] = f"[{updated_message_result.changed_message_count}]"
 
-    return json_success(request)
+    return json_success(request, data={"detached_uploads": updated_message_result.detached_uploads})
 
 
 def validate_can_delete_message(user_profile: UserProfile, message: Message) -> None:
-    if user_profile.is_realm_admin:
-        # Admin can delete any message, any time.
+    if user_profile.can_delete_any_message():
         return
     if message.sender != user_profile and message.sender.bot_owner_id != user_profile.id:
         # Users can only delete messages sent by them or by their bots.

@@ -14,8 +14,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from django.conf import settings
 from django.core.cache import caches
 from django.core.cache.backends.base import BaseCache
-from django.db.models import Q
-from django_stubs_ext import QuerySetAny
+from django.db.models import Q, QuerySet
 from typing_extensions import ParamSpec
 
 if TYPE_CHECKING:
@@ -79,7 +78,7 @@ def get_or_create_key_prefix() -> str:
         tries = 1
         while tries < 10:
             with open(filename) as f:
-                prefix = f.readline()[:-1]
+                prefix = f.readline().removesuffix("\n")
             if len(prefix) == 33:
                 break
             tries += 1
@@ -140,7 +139,7 @@ def cache_with_key(
                 return val[0]
 
             val = func(*args, **kwargs)
-            if isinstance(val, QuerySetAny):
+            if isinstance(val, QuerySet):
                 logging.error(
                     "cache_with_key attempted to store a full QuerySet object -- declining to cache",
                     stack_info=True,
@@ -215,7 +214,7 @@ def cache_get_many(keys: list[str], cache_name: str | None = None) -> dict[str, 
     remote_cache_stats_start()
     ret = get_cache_backend(cache_name).get_many(keys)
     remote_cache_stats_finish()
-    return {key[len(KEY_PREFIX) :]: value for key, value in ret.items()}
+    return {key.removeprefix(KEY_PREFIX): value for key, value in ret.items()}
 
 
 def safe_cache_get_many(keys: list[str], cache_name: str | None = None) -> dict[str, Any]:

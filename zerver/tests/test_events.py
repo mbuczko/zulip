@@ -248,6 +248,7 @@ from zerver.models import (
 )
 from zerver.models.clients import get_client
 from zerver.models.groups import SystemGroups
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.streams import get_stream
 from zerver.models.users import get_user_by_delivery_email
 from zerver.openapi.openapi import validate_against_openapi_schema
@@ -1036,9 +1037,11 @@ class NormalActionsTest(BaseAction):
         iago = self.example_user("iago")
         url = upload_message_attachment(
             "img.png", "image/png", read_test_image_file("img.png"), self.example_user("iago")
-        )
+        )[0]
         path_id = url[len("/user_upload/") + 1 :]
-        self.send_stream_message(iago, "Verona", f"[img.png]({url})")
+        self.send_stream_message(
+            iago, "Verona", f"[img.png]({url})", skip_capture_on_commit_callbacks=True
+        )
 
         # Generating a thumbnail for an image sends a message update event
         with self.verify_action(state_change_expected=False) as events:
@@ -1676,13 +1679,13 @@ class NormalActionsTest(BaseAction):
                 client_id=client.id,
             )
 
+        check_user_settings_update("events[0]", events[0])
+        check_update_global_notifications("events[1]", events[1], not away_val)
         check_user_status(
-            "events[0]",
-            events[0],
+            "events[2]",
+            events[2],
             {"away", "status_text", "emoji_name", "emoji_code", "reaction_type"},
         )
-        check_user_settings_update("events[1]", events[1])
-        check_update_global_notifications("events[2]", events[2], not away_val)
         check_presence(
             "events[3]",
             events[3],
@@ -1704,13 +1707,13 @@ class NormalActionsTest(BaseAction):
                 client_id=client.id,
             )
 
+        check_user_settings_update("events[0]", events[0])
+        check_update_global_notifications("events[1]", events[1], not away_val)
         check_user_status(
-            "events[0]",
-            events[0],
+            "events[2]",
+            events[2],
             {"away", "status_text", "emoji_name", "emoji_code", "reaction_type"},
         )
-        check_user_settings_update("events[1]", events[1])
-        check_update_global_notifications("events[2]", events[2], not away_val)
         check_presence(
             "events[3]",
             events[3],
@@ -1732,9 +1735,9 @@ class NormalActionsTest(BaseAction):
                 client_id=client.id,
             )
 
-        check_user_status("events[0]", events[0], {"away"})
-        check_user_settings_update("events[1]", events[1])
-        check_update_global_notifications("events[2]", events[2], not away_val)
+        check_user_settings_update("events[0]", events[0])
+        check_update_global_notifications("events[1]", events[1], not away_val)
+        check_user_status("events[2]", events[2], {"away"})
         check_presence(
             "events[3]",
             events[3],
@@ -1809,11 +1812,14 @@ class NormalActionsTest(BaseAction):
                 self.user_profile.realm, "backend", [othello], "Backend team", acting_user=None
             )
         check_user_group_add("events[0]", events[0])
+        nobody_group = NamedUserGroup.objects.get(
+            name=SystemGroups.NOBODY, realm=self.user_profile.realm, is_system_group=True
+        )
+        self.assertEqual(events[0]["group"]["can_manage_group"], nobody_group.id)
         everyone_group = NamedUserGroup.objects.get(
             name=SystemGroups.EVERYONE, realm=self.user_profile.realm, is_system_group=True
         )
         self.assertEqual(events[0]["group"]["can_mention_group"], everyone_group.id)
-
         moderators_group = NamedUserGroup.objects.get(
             name=SystemGroups.MODERATORS, realm=self.user_profile.realm, is_system_group=True
         )
@@ -1827,10 +1833,16 @@ class NormalActionsTest(BaseAction):
                 "frontend",
                 [othello],
                 "",
-                {"can_mention_group": user_group},
+                {"can_manage_group": user_group, "can_mention_group": user_group},
                 acting_user=None,
             )
         check_user_group_add("events[0]", events[0])
+        self.assertEqual(
+            events[0]["group"]["can_manage_group"],
+            AnonymousSettingGroupDict(
+                direct_members=[othello.id], direct_subgroups=[moderators_group.id]
+            ),
+        )
         self.assertEqual(
             events[0]["group"]["can_mention_group"],
             AnonymousSettingGroupDict(
@@ -2070,9 +2082,32 @@ class NormalActionsTest(BaseAction):
             )
 
     def test_change_full_name(self) -> None:
+        now = timezone_now()
         with self.verify_action() as events:
             do_change_full_name(self.user_profile, "Sir Hamlet", self.user_profile)
         check_realm_user_update("events[0]", events[0], "full_name")
+        self.assertEqual(
+            RealmAuditLog.objects.filter(
+                realm=self.user_profile.realm,
+                event_type=AuditLogEventType.USER_FULL_NAME_CHANGED,
+                event_time__gte=now,
+                acting_user=self.user_profile,
+            ).count(),
+            1,
+        )
+
+        # Verify no operation if the value isn't changing.
+        with self.verify_action(num_events=0, state_change_expected=False):
+            do_change_full_name(self.user_profile, "Sir Hamlet", self.user_profile)
+        self.assertEqual(
+            RealmAuditLog.objects.filter(
+                realm=self.user_profile.realm,
+                event_type=AuditLogEventType.USER_FULL_NAME_CHANGED,
+                event_time__gte=now,
+                acting_user=self.user_profile,
+            ).count(),
+            1,
+        )
 
         self.set_up_db_for_testing_user_access()
         cordelia = self.example_user("cordelia")
@@ -3333,7 +3368,7 @@ class NormalActionsTest(BaseAction):
 
         # Now we check the deletion of the export.
         audit_log_entry = RealmAuditLog.objects.filter(
-            event_type=RealmAuditLog.REALM_EXPORTED
+            event_type=AuditLogEventType.REALM_EXPORTED
         ).first()
         assert audit_log_entry is not None
         audit_log_entry_id = audit_log_entry.id
@@ -3440,7 +3475,6 @@ class RealmPropertyActionTest(BaseAction):
             message_retention_days=[10, 20],
             name=["Zulip", "New Name"],
             waiting_period_threshold=[1000, 2000],
-            create_web_public_stream_policy=Realm.CREATE_WEB_PUBLIC_STREAM_POLICY_TYPES,
             invite_to_stream_policy=Realm.COMMON_POLICY_TYPES,
             user_group_edit_policy=Realm.COMMON_POLICY_TYPES,
             wildcard_mention_policy=Realm.WILDCARD_MENTION_POLICY_TYPES,
@@ -3480,7 +3514,7 @@ class RealmPropertyActionTest(BaseAction):
             self.assertEqual(
                 RealmAuditLog.objects.filter(
                     realm=self.user_profile.realm,
-                    event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                    event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                     event_time__gte=now,
                     acting_user=self.user_profile,
                 ).count(),
@@ -3505,7 +3539,7 @@ class RealmPropertyActionTest(BaseAction):
             self.assertEqual(
                 RealmAuditLog.objects.filter(
                     realm=self.user_profile.realm,
-                    event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                    event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                     event_time__gte=now,
                     acting_user=self.user_profile,
                     extra_data={
@@ -3550,7 +3584,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=self.user_profile.realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
             ).count(),
@@ -3602,7 +3636,7 @@ class RealmPropertyActionTest(BaseAction):
             self.assertEqual(
                 RealmAuditLog.objects.filter(
                     realm=self.user_profile.realm,
-                    event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                    event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                     event_time__gte=now,
                     acting_user=self.user_profile,
                     extra_data={
@@ -3642,7 +3676,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
             ).count(),
@@ -3666,7 +3700,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
                 extra_data={
@@ -3709,7 +3743,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
                 extra_data={
@@ -3745,7 +3779,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
                 extra_data={
@@ -3772,6 +3806,10 @@ class RealmPropertyActionTest(BaseAction):
                 self.do_set_realm_permission_group_setting_test(prop)
 
         for prop in Realm.REALM_PERMISSION_GROUP_SETTINGS_WITH_NEW_API_FORMAT:
+            if Realm.REALM_PERMISSION_GROUP_SETTINGS[prop].require_system_group:
+                # Anonymous system groups aren't relevant when
+                # restricted to system groups.
+                continue
             with self.settings(SEND_DIGEST_EMAILs=True):
                 self.do_set_realm_permission_group_setting_to_anonymous_groups_test(prop)
 
@@ -3815,7 +3853,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=self.user_profile.realm,
-                event_type=RealmAuditLog.REALM_DEFAULT_USER_SETTINGS_CHANGED,
+                event_type=AuditLogEventType.REALM_DEFAULT_USER_SETTINGS_CHANGED,
                 event_time__gte=now,
                 acting_user=self.user_profile,
             ).count(),
@@ -3836,7 +3874,7 @@ class RealmPropertyActionTest(BaseAction):
             self.assertEqual(
                 RealmAuditLog.objects.filter(
                     realm=self.user_profile.realm,
-                    event_type=RealmAuditLog.REALM_DEFAULT_USER_SETTINGS_CHANGED,
+                    event_type=AuditLogEventType.REALM_DEFAULT_USER_SETTINGS_CHANGED,
                     event_time__gte=now,
                     acting_user=self.user_profile,
                     extra_data={
@@ -3893,7 +3931,7 @@ class RealmPropertyActionTest(BaseAction):
         self.assertEqual(
             RealmAuditLog.objects.filter(
                 realm=realm,
-                event_type=RealmAuditLog.REALM_PROPERTY_CHANGED,
+                event_type=AuditLogEventType.REALM_PROPERTY_CHANGED,
                 acting_user=None,
                 extra_data={
                     RealmAuditLog.OLD_VALUE: old_timestamp,

@@ -103,6 +103,7 @@ from zerver.models import (
     UserTopic,
 )
 from zerver.models.clients import get_client
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import get_realm
 from zerver.models.scheduled_jobs import NotificationTriggers
 from zerver.models.streams import get_stream
@@ -877,7 +878,7 @@ class PushBouncerNotificationTest(BouncerTestCase):
         }
         RemoteRealmAuditLog.objects.create(
             server=remote_server,
-            event_type=RealmAuditLog.USER_CREATED,
+            event_type=AuditLogEventType.USER_CREATED,
             event_time=current_time - timedelta(minutes=10),
             extra_data={RealmAuditLog.ROLE_COUNT: {RealmAuditLog.ROLE_COUNT_HUMANS: human_counts}},
         )
@@ -939,7 +940,7 @@ class PushBouncerNotificationTest(BouncerTestCase):
 
         RemoteRealmAuditLog.objects.create(
             server=remote_server,
-            event_type=RealmAuditLog.USER_DEACTIVATED,
+            event_type=AuditLogEventType.USER_DEACTIVATED,
             event_time=current_time - timedelta(minutes=8),
             extra_data={RealmAuditLog.ROLE_COUNT: {RealmAuditLog.ROLE_COUNT_HUMANS: human_counts}},
         )
@@ -1347,7 +1348,8 @@ class PushBouncerNotificationTest(BouncerTestCase):
             ),
             mock.patch("zerver.worker.deferred_work.retry_event") as mock_retry,
         ):
-            do_regenerate_api_key(user, user)
+            with self.captureOnCommitCallbacks(execute=True):
+                do_regenerate_api_key(user, user)
             mock_retry.assert_called()
 
             # We didn't manage to communicate with the bouncer, to the tokens are still there:
@@ -1356,7 +1358,10 @@ class PushBouncerNotificationTest(BouncerTestCase):
 
         # Now we successfully remove them:
         time_sent += timedelta(minutes=1)
-        with time_machine.travel(time_sent, tick=False):
+        with (
+            time_machine.travel(time_sent, tick=False),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
             do_regenerate_api_key(user, user)
         tokens = list(RemotePushDeviceToken.objects.filter(user_uuid=user.uuid, server=server))
         self.assert_length(tokens, 0)
@@ -1600,7 +1605,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.USER_CREATED,
+            event_type=AuditLogEventType.USER_CREATED,
             event_time=end_time,
             extra_data=orjson.dumps(
                 {
@@ -1612,7 +1617,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.REALM_LOGO_CHANGED,
+            event_type=AuditLogEventType.REALM_LOGO_CHANGED,
             event_time=end_time,
             extra_data=orjson.dumps({"foo": "bar"}).decode(),
         )
@@ -1724,7 +1729,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         # Verify the RemoteRealmAuditLog entries created.
         remote_audit_logs = (
             RemoteRealmAuditLog.objects.filter(
-                event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                 remote_realm=zephyr_remote_realm,
             )
             .order_by("id")
@@ -1735,7 +1740,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
             list(remote_audit_logs),
             [
                 dict(
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     remote_id=None,
                     realm_id=zephyr_realm.id,
                     extra_data={
@@ -1745,7 +1750,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
                     },
                 ),
                 dict(
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     remote_id=None,
                     realm_id=zephyr_realm.id,
                     extra_data={
@@ -1755,7 +1760,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
                     },
                 ),
                 dict(
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     remote_id=None,
                     realm_id=zephyr_realm.id,
                     extra_data={
@@ -1765,7 +1770,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
                     },
                 ),
                 dict(
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     remote_id=None,
                     realm_id=zephyr_realm.id,
                     extra_data={
@@ -1775,7 +1780,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
                     },
                 ),
                 dict(
-                    event_type=RemoteRealmAuditLog.REMOTE_REALM_VALUE_UPDATED,
+                    event_type=AuditLogEventType.REMOTE_REALM_VALUE_UPDATED,
                     remote_id=None,
                     realm_id=zephyr_realm.id,
                     extra_data={
@@ -1821,7 +1826,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.REALM_LOGO_CHANGED,
+            event_type=AuditLogEventType.REALM_LOGO_CHANGED,
             event_time=end_time,
             extra_data={"data": "foo"},
         )
@@ -1831,7 +1836,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.USER_REACTIVATED,
+            event_type=AuditLogEventType.USER_REACTIVATED,
             event_time=end_time,
             extra_data={
                 RealmAuditLog.ROLE_COUNT: realm_user_count_by_role(user.realm),
@@ -1960,7 +1965,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         realm_audit_log = RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.USER_CREATED,
+            event_type=AuditLogEventType.USER_CREATED,
             event_time=end_time,
             extra_data=orjson.dumps(
                 {
@@ -2063,7 +2068,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.USER_CREATED,
+            event_type=AuditLogEventType.USER_CREATED,
             event_time=end_time,
             extra_data={
                 RealmAuditLog.ROLE_COUNT: realm_user_count_by_role(user.realm),
@@ -2179,7 +2184,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.USER_REACTIVATED,
+            event_type=AuditLogEventType.USER_REACTIVATED,
             event_time=self.TIME_ZERO,
             extra_data={
                 RealmAuditLog.ROLE_COUNT: realm_user_count_by_role(user.realm),
@@ -2189,7 +2194,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         RealmAuditLog.objects.create(
             realm=user.realm,
             modified_user=user,
-            event_type=RealmAuditLog.REALM_LOGO_CHANGED,
+            event_type=AuditLogEventType.REALM_LOGO_CHANGED,
             event_time=self.TIME_ZERO,
             extra_data=orjson.dumps({"foo": "bar"}).decode(),
         )
@@ -2204,8 +2209,8 @@ class AnalyticsBouncerTest(BouncerTestCase):
                 first_call = False
             else:
                 # Test that we're respecting SYNCED_BILLING_EVENTS
-                self.assertIn(f'"event_type":{RealmAuditLog.USER_REACTIVATED}', str(args))
-                self.assertNotIn(f'"event_type":{RealmAuditLog.REALM_LOGO_CHANGED}', str(args))
+                self.assertIn(f'"event_type":{AuditLogEventType.USER_REACTIVATED}', str(args))
+                self.assertNotIn(f'"event_type":{AuditLogEventType.REALM_LOGO_CHANGED}', str(args))
                 # Test that we're respecting REALMAUDITLOG_PUSHED_FIELDS
                 self.assertIn("backfilled", str(args))
                 self.assertNotIn("modified_user", str(args))
@@ -2226,7 +2231,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
             realm=user.realm,
             modified_user=user,
             backfilled=True,
-            event_type=RealmAuditLog.USER_REACTIVATED,
+            event_type=AuditLogEventType.USER_REACTIVATED,
             event_time=self.TIME_ZERO,
             extra_data=orjson.dumps({RealmAuditLog.ROLE_COUNT: user_count}).decode(),
         )
@@ -2239,7 +2244,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         self.assertEqual(remote_log_entry.backfilled, True)
         assert remote_log_entry.extra_data is not None
         self.assertEqual(remote_log_entry.extra_data, {RealmAuditLog.ROLE_COUNT: user_count})
-        self.assertEqual(remote_log_entry.event_type, RealmAuditLog.USER_REACTIVATED)
+        self.assertEqual(remote_log_entry.event_type, AuditLogEventType.USER_REACTIVATED)
 
     # This verifies that the bouncer is backwards-compatible with remote servers using
     # TextField to store extra_data.
@@ -2258,7 +2263,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
             log_entry = RealmAuditLog.objects.create(
                 realm=user.realm,
                 modified_user=user,
-                event_type=RealmAuditLog.USER_REACTIVATED,
+                event_type=AuditLogEventType.USER_REACTIVATED,
                 event_time=self.TIME_ZERO,
                 extra_data=orjson.dumps(
                     {
@@ -2714,7 +2719,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
         self.assertEqual(analytics_logger.output, ["WARNING:zulip.analytics:Dummy warning"])
 
         audit_log = RemoteRealmAuditLog.objects.latest("id")
-        self.assertEqual(audit_log.event_type, RemoteRealmAuditLog.REMOTE_REALM_LOCALLY_DELETED)
+        self.assertEqual(audit_log.event_type, AuditLogEventType.REMOTE_REALM_LOCALLY_DELETED)
         self.assertEqual(audit_log.remote_realm, remote_realm_for_deleted_realm)
 
         from django.core.mail import outbox
@@ -2753,7 +2758,7 @@ class AnalyticsBouncerTest(BouncerTestCase):
 
         audit_log = RemoteRealmAuditLog.objects.latest("id")
         self.assertEqual(
-            audit_log.event_type, RemoteRealmAuditLog.REMOTE_REALM_LOCALLY_DELETED_RESTORED
+            audit_log.event_type, AuditLogEventType.REMOTE_REALM_LOCALLY_DELETED_RESTORED
         )
         self.assertEqual(audit_log.remote_realm, remote_realm_for_deleted_realm)
 
@@ -4087,7 +4092,8 @@ class TestAPNs(PushNotificationTest):
         # Mark the messages as read and test whether
         # the count decreases correctly.
         for i, message_id in enumerate(message_ids):
-            do_update_message_flags(user_profile, "add", "read", [message_id])
+            with self.captureOnCommitCallbacks(execute=True):
+                do_update_message_flags(user_profile, "add", "read", [message_id])
             self.assertEqual(get_apns_badge_count(user_profile), 0)
             self.assertEqual(get_apns_badge_count_future(user_profile), num_messages - i - 1)
 
@@ -5073,10 +5079,10 @@ class TestClearOnRead(ZulipTestCase):
             message_id__in=message_ids,
         ).update(flags=F("flags").bitor(UserMessage.flags.active_mobile_push_notification))
 
-        with mock_queue_publish("zerver.actions.message_flags.queue_json_publish") as mock_publish:
+        with mock_queue_publish("zerver.actions.message_flags.queue_event_on_commit") as m:
             assert stream.recipient_id is not None
             do_mark_stream_messages_as_read(hamlet, stream.recipient_id)
-            queue_items = [c[0][1] for c in mock_publish.call_args_list]
+            queue_items = [c[0][1] for c in m.call_args_list]
             groups = [item["message_ids"] for item in queue_items]
 
         self.assert_length(groups, 1)
@@ -5158,7 +5164,7 @@ class PushBouncerSignupTest(ZulipTestCase):
 
         server = RemoteZulipServer.objects.get(uuid=zulip_org_id)
         remote_realm_audit_log = RemoteZulipServerAuditLog.objects.filter(
-            event_type=RealmAuditLog.REMOTE_SERVER_DEACTIVATED
+            event_type=AuditLogEventType.REMOTE_SERVER_DEACTIVATED
         ).last()
         assert remote_realm_audit_log is not None
         self.assertTrue(server.deactivated)

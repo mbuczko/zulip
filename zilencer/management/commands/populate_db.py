@@ -70,6 +70,8 @@ from zerver.models import (
 )
 from zerver.models.alert_words import flush_alert_word
 from zerver.models.clients import get_client
+from zerver.models.onboarding_steps import OnboardingStep
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import WildcardMentionPolicyEnum, get_realm
 from zerver.models.recipients import get_or_create_direct_message_group
 from zerver.models.streams import get_stream
@@ -170,7 +172,7 @@ def subscribe_users_to_streams(realm: Realm, stream_dict: dict[str, dict[str, An
                 modified_user=profile,
                 modified_stream=stream,
                 event_last_message_id=0,
-                event_type=RealmAuditLog.SUBSCRIPTION_CREATED,
+                event_type=AuditLogEventType.SUBSCRIPTION_CREATED,
                 event_time=event_time,
             )
             all_subscription_logs.append(log)
@@ -250,11 +252,11 @@ class Command(ZulipBaseCommand):
         parser.add_argument("--max-topics", type=int, help="The number of maximum topics to create")
 
         parser.add_argument(
-            "--huddles",
-            dest="num_huddles",
+            "--direct-message-groups",
+            dest="num_direct_message_groups",
             type=int,
             default=3,
-            help="The number of huddles to create.",
+            help="The number of direct message groups to create.",
         )
 
         parser.add_argument(
@@ -268,10 +270,10 @@ class Command(ZulipBaseCommand):
         parser.add_argument("--threads", type=int, default=1, help="The number of threads to use.")
 
         parser.add_argument(
-            "--percent-huddles",
+            "--percent-direct-message-groups",
             type=float,
             default=15,
-            help="The percent of messages to be huddles.",
+            help="The percent of messages to be direct message groups.",
         )
 
         parser.add_argument(
@@ -307,7 +309,7 @@ class Command(ZulipBaseCommand):
         # Suppress spammy output from the push notifications logger
         push_notifications_logger.disabled = True
 
-        if options["percent_huddles"] + options["percent_personals"] > 100:
+        if options["percent_direct_message_groups"] + options["percent_personals"] > 100:
             self.stderr.write("Error!  More than 100% of messages allocated.\n")
             return
 
@@ -404,7 +406,7 @@ class Command(ZulipBaseCommand):
                 contact_email="remotezulipserver@zulip.com",
             )
             RemoteZulipServerAuditLog.objects.create(
-                event_type=RemoteZulipServerAuditLog.REMOTE_SERVER_CREATED,
+                event_type=AuditLogEventType.REMOTE_SERVER_CREATED,
                 server=server,
                 event_time=server.last_updated,
             )
@@ -750,7 +752,7 @@ class Command(ZulipBaseCommand):
                     modified_user=profile,
                     modified_stream_id=recipient.type_id,
                     event_last_message_id=0,
-                    event_type=RealmAuditLog.SUBSCRIPTION_CREATED,
+                    event_type=AuditLogEventType.SUBSCRIPTION_CREATED,
                     event_time=event_time,
                 )
                 all_subscription_logs.append(log)
@@ -935,10 +937,21 @@ class Command(ZulipBaseCommand):
                     defaults={"last_active_time": date, "last_connected_time": date},
                 )
 
-        user_profiles_ids = [user_profile.id for user_profile in user_profiles]
+        user_profiles_ids = []
+        onboarding_steps = []
+        for user_profile in user_profiles:
+            user_profiles_ids.append(user_profile.id)
+            onboarding_steps.append(
+                OnboardingStep(
+                    user=user_profile, onboarding_step="narrow_to_dm_with_welcome_bot_new_user"
+                )
+            )
 
-        # Create several initial huddles
-        for i in range(options["num_huddles"]):
+        # Existing users shouldn't narrow to DM with welcome bot on first login.
+        OnboardingStep.objects.bulk_create(onboarding_steps)
+
+        # Create several initial direct message groups
+        for i in range(options["num_direct_message_groups"]):
             get_or_create_direct_message_group(
                 random.sample(user_profiles_ids, random.randint(3, 4))
             )
@@ -1167,7 +1180,7 @@ def get_recipient_by_id(rid: int) -> Recipient:
 # Create some test messages, including:
 # - multiple streams
 # - multiple subjects per stream
-# - multiple huddles
+# - multiple direct message groups
 # - multiple personal conversations
 # - multiple messages per subject
 # - both single and multi-line content
@@ -1193,13 +1206,15 @@ def generate_and_send_messages(
         recipient.id
         for recipient in Recipient.objects.filter(type=Recipient.STREAM, type_id__in=stream_ids)
     ]
-    recipient_huddles: list[int] = [
+    recipient_direct_message_groups: list[int] = [
         h.id for h in Recipient.objects.filter(type=Recipient.DIRECT_MESSAGE_GROUP)
     ]
 
-    huddle_members: dict[int, list[int]] = {}
-    for h in recipient_huddles:
-        huddle_members[h] = [s.user_profile.id for s in Subscription.objects.filter(recipient_id=h)]
+    direct_message_group_members: dict[int, list[int]] = {}
+    for h in recipient_direct_message_groups:
+        direct_message_group_members[h] = [
+            s.user_profile.id for s in Subscription.objects.filter(recipient_id=h)
+        ]
 
     # Generate different topics for each stream
     possible_topic_names = {}
@@ -1242,12 +1257,14 @@ def generate_and_send_messages(
                 message.recipient = get_recipient_by_id(recipient_id)
             elif message_type == Recipient.DIRECT_MESSAGE_GROUP:
                 message.recipient = get_recipient_by_id(recipient_id)
-        elif randkey <= random_max * options["percent_huddles"] / 100.0:
+        elif randkey <= random_max * options["percent_direct_message_groups"] / 100.0:
             message_type = Recipient.DIRECT_MESSAGE_GROUP
-            message.recipient = get_recipient_by_id(random.choice(recipient_huddles))
+            message.recipient = get_recipient_by_id(random.choice(recipient_direct_message_groups))
         elif (
             randkey
-            <= random_max * (options["percent_huddles"] + options["percent_personals"]) / 100.0
+            <= random_max
+            * (options["percent_direct_message_groups"] + options["percent_personals"])
+            / 100.0
         ):
             message_type = Recipient.PERSONAL
             personals_pair = random.choice(personals_pairs)
@@ -1257,7 +1274,7 @@ def generate_and_send_messages(
             message.recipient = get_recipient_by_id(random.choice(recipient_streams))
 
         if message_type == Recipient.DIRECT_MESSAGE_GROUP:
-            sender_id = random.choice(huddle_members[message.recipient.id])
+            sender_id = random.choice(direct_message_group_members[message.recipient.id])
             message.sender = get_user_profile_by_id(sender_id)
         elif message_type == Recipient.PERSONAL:
             message.recipient = Recipient.objects.get(

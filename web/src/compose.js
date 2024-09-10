@@ -39,7 +39,6 @@ export function clear_private_stream_alert() {
 }
 
 export function clear_preview_area() {
-    $("textarea#compose-textarea").show();
     $("textarea#compose-textarea").trigger("focus");
     $("#compose .undo_markdown_preview").hide();
     $("#compose .preview_message_area").hide();
@@ -59,12 +58,19 @@ export function show_preview_area() {
     $("#compose").addClass("preview_mode");
     $("#compose .preview_mode_disabled .compose_control_button").attr("tabindex", -1);
 
-    const content = $("textarea#compose-textarea").val();
-    $("textarea#compose-textarea").hide();
+    const $compose_textarea = $("textarea#compose-textarea");
+    const content = $compose_textarea.val();
+    const edit_height = $compose_textarea.height();
+
     $("#compose .markdown_preview").hide();
     $("#compose .undo_markdown_preview").show();
     $("#compose .undo_markdown_preview").trigger("focus");
-    $("#compose .preview_message_area").show();
+
+    const $preview_message_area = $("#compose .preview_message_area");
+    // Set the preview area to the edit height to keep from
+    // having the preview jog the size of the compose box.
+    $preview_message_area.css({height: edit_height + "px"});
+    $preview_message_area.show();
 
     compose_ui.render_and_show_preview(
         $("#compose .markdown_preview_spinner"),

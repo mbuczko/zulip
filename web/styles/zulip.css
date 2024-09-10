@@ -137,7 +137,7 @@ p.n-margin {
     padding-left: 26px;
     text-indent: -10px;
 
-    & i {
+    .all-messages-search-caution-icon {
         margin: 0 3px 0 1px;
     }
 
@@ -443,33 +443,6 @@ body.has-overlay-scrollbar {
             }
         }
 
-        & .signup_button {
-            color: var(
-                --color-navbar-spectator-low-attention-brand-button-text
-            );
-            background-color: var(
-                --color-navbar-spectator-low-attention-brand-button-background
-            );
-
-            &:hover {
-                color: var(
-                    --color-navbar-spectator-low-attention-brand-button-text
-                );
-                background-color: var(
-                    --color-navbar-spectator-low-attention-brand-button-background-hover
-                );
-            }
-
-            &:active {
-                color: var(
-                    --color-navbar-spectator-low-attention-brand-button-text
-                );
-                background-color: var(
-                    --color-navbar-spectator-low-attention-brand-button-background-active
-                );
-            }
-        }
-
         & .login_button {
             color: var(
                 --color-navbar-spectator-medium-attention-brand-button-text
@@ -562,7 +535,7 @@ body.has-overlay-scrollbar {
 
     .column-left .left-sidebar {
         width: var(--left-sidebar-width);
-        padding-left: var(--left-sidebar-collapse-widget-gutter);
+        padding-left: var(--left-sidebar-padding-left);
     }
 
     .column-right .right-sidebar {
@@ -580,7 +553,7 @@ body.has-overlay-scrollbar {
 #compose-content {
     margin-right: var(--right-sidebar-width);
     margin-left: calc(
-        var(--left-sidebar-width) + var(--left-sidebar-collapse-widget-gutter)
+        var(--left-sidebar-width) + var(--left-sidebar-padding-left)
     );
     position: relative;
 }
@@ -1014,7 +987,6 @@ div.focused-message-list {
 
 .message_length_controller {
     .message_length_toggle {
-        display: none;
         width: 100%;
         height: 24px;
         margin-bottom: var(--message-box-markdown-aligned-vertical-space);
@@ -1915,7 +1887,7 @@ body:not(.hide-left-sidebar) {
             background: hsl(240deg 96% 68% / 50%);
             border-radius: 50%;
 
-            & i {
+            & .scroll-to-bottom-icon {
                 color: hsl(0deg 0% 100%);
                 margin: 0 auto;
                 font-size: 21px;

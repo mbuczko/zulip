@@ -2275,7 +2275,7 @@ class GetOldMessagesTest(ZulipTestCase):
 
         narrow = [dict(operator="dm", operand=non_existent_direct_message_group, negated=True)]
         result = self.get_and_check_messages(dict(narrow=orjson.dumps(narrow).decode()))
-        self.assertEqual([m["id"] for m in result["messages"]], [1, 3])
+        self.assertNotEqual(result["messages"], [])
 
     def test_get_visible_messages_with_narrow_dm(self) -> None:
         me = self.example_user("hamlet")
@@ -3919,6 +3919,18 @@ class GetOldMessagesTest(ZulipTestCase):
             )
         ]
         self.exercise_bad_narrow_operand("dm", invalid_operands)
+
+    def test_bad_narrow_dm_empty_list(self) -> None:
+        self.login("hamlet")
+        post_params = {
+            "anchor": "0",
+            "num_before": "0",
+            "num_after": "0",
+            "narrow": orjson.dumps([{"operand": [], "operator": "dm"}]).decode(),
+        }
+        result = self.client_get("/json/messages", post_params)
+        messages = self.assert_json_success(result)["messages"]
+        self.assertEqual(messages, [])
 
     def test_message_without_rendered_content(self) -> None:
         """Older messages may not have rendered_content in the database"""

@@ -15,7 +15,7 @@ import {page_params} from "./page_params";
 import type {User} from "./people";
 import * as people from "./people";
 import type {UserPillItem} from "./search_suggestion";
-import {realm} from "./state_data";
+import {current_user, realm} from "./state_data";
 import type {NarrowTerm} from "./state_data";
 import * as stream_data from "./stream_data";
 import type {StreamSubscription} from "./sub_store";
@@ -297,6 +297,7 @@ export class Filter {
     _can_mark_messages_read?: boolean;
     requires_adjustment_for_moved_with_target?: boolean;
     narrow_requires_hash_change: boolean;
+    cached_sorted_terms_for_comparison?: string[] | undefined = undefined;
 
     constructor(terms: NarrowTerm[]) {
         this._terms = terms;
@@ -507,7 +508,11 @@ export class Filter {
                 // terms list. This is done so that the last active filter is correctly
                 // detected by the `get_search_result` function (in search_suggestions.ts).
                 maybe_add_search_terms();
-                term = {negated, operator, operand};
+                term = {
+                    negated,
+                    operator: Filter.canonicalize_operator(operator),
+                    operand,
+                };
                 terms.push(term);
             }
         }
@@ -826,7 +831,19 @@ export class Filter {
             });
 
             assert(typeof message.display_recipient !== "string");
-            const dm_participants = message.display_recipient.map((user) => user.email);
+
+            // We should make sure the current user is not included for
+            // the `dm` operand for the narrow.
+            const dm_participants = message.display_recipient
+                .map((user) => user.email)
+                .filter((user_email) => user_email !== current_user.email);
+
+            // However, if the current user is the only recipient of the
+            // message, we should include the user in the operand.
+            if (dm_participants.length === 0) {
+                dm_participants.push(current_user.email);
+            }
+
             const dm_operand = dm_participants.join(",");
 
             const dm_conversation_terms = [{operator: "dm", operand: dm_operand, negated: false}];
@@ -871,6 +888,7 @@ export class Filter {
 
     setup_filter(terms: NarrowTerm[]): void {
         this._terms = this.fix_terms(terms);
+        this.cached_sorted_terms_for_comparison = undefined;
         if (this.has_operator("channel")) {
             this._sub = stream_data.get_sub_by_name(this.operands("channel")[0]!);
         }
@@ -878,12 +896,16 @@ export class Filter {
 
     equals(filter: Filter, excluded_operators?: string[]): boolean {
         return _.isEqual(
-            filter.sorted_terms(excluded_operators),
-            this.sorted_terms(excluded_operators),
+            filter.sorted_terms_for_comparison(excluded_operators),
+            this.sorted_terms_for_comparison(excluded_operators),
         );
     }
 
-    sorted_terms(excluded_operators?: string[]): NarrowTerm[] {
+    sorted_terms_for_comparison(excluded_operators?: string[]): string[] {
+        if (!excluded_operators && this.cached_sorted_terms_for_comparison !== undefined) {
+            return this.cached_sorted_terms_for_comparison;
+        }
+
         let filter_terms = this._terms;
         if (excluded_operators) {
             filter_terms = this._terms.filter(
@@ -891,11 +913,22 @@ export class Filter {
             );
         }
 
-        return filter_terms.sort((a, b) => {
-            const a_joined = `${a.negated ? "0" : "1"}-${a.operator}-${a.operand}`;
-            const b_joined = `${b.negated ? "0" : "1"}-${b.operator}-${b.operand}`;
-            return util.strcmp(a_joined, b_joined);
-        });
+        const sorted_simplified_terms = filter_terms
+            .map((term) => {
+                let operand = term.operand;
+                if (term.operator === "channel" || term.operator === "topic") {
+                    operand = operand.toLowerCase();
+                }
+
+                return `${term.negated ? "0" : "1"}-${term.operator}-${operand}`;
+            })
+            .sort(util.strcmp);
+
+        if (!excluded_operators) {
+            this.cached_sorted_terms_for_comparison = sorted_simplified_terms;
+        }
+
+        return sorted_simplified_terms;
     }
 
     predicate(): (message: Message) => boolean {
@@ -1284,6 +1317,7 @@ export class Filter {
                 }
                 return person.full_name;
             });
+            names.sort(util.make_strcmp());
             return util.format_array_as_list(names, "long", "conjunction");
         }
         if (term_types.length === 1 && _.isEqual(term_types, ["sender"])) {

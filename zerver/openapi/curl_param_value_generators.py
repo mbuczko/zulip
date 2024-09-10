@@ -266,6 +266,7 @@ def get_temp_user_group_id() -> dict[str, object]:
     user_group, _ = NamedUserGroup.objects.get_or_create(
         name="temp",
         realm=get_realm("zulip"),
+        can_manage_group_id=11,
         can_mention_group_id=11,
         realm_for_sharding=get_realm("zulip"),
     )
@@ -351,7 +352,7 @@ def deactivate_own_user() -> dict[str, object]:
 @openapi_param_value_generator(["/attachments/{attachment_id}:delete"])
 def remove_attachment() -> dict[str, object]:
     user_profile = helpers.example_user("iago")
-    url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+    url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
     attachment_id = url.replace("/user_uploads/", "").split("/")[0]
 
     return {"attachment_id": attachment_id}

@@ -9,6 +9,7 @@ import pyvips
 from django.conf import settings
 
 import zerver.lib.upload
+from zerver.actions.create_user import do_create_user
 from zerver.actions.user_settings import do_delete_avatar_image
 from zerver.lib.avatar_hash import user_avatar_path
 from zerver.lib.create_user import copy_default_settings
@@ -48,7 +49,7 @@ class S3Test(ZulipTestCase):
         bucket = create_s3_buckets(settings.S3_AUTH_UPLOADS_BUCKET)[0]
 
         user_profile = self.example_user("hamlet")
-        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
 
         base = "/user_uploads/"
         self.assertEqual(base, url[: len(base)])
@@ -67,7 +68,7 @@ class S3Test(ZulipTestCase):
     def test_save_attachment_contents(self) -> None:
         create_s3_buckets(settings.S3_AUTH_UPLOADS_BUCKET)
         user_profile = self.example_user("hamlet")
-        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
 
         path_id = re.sub(r"/user_uploads/", "", url)
         output = BytesIO()
@@ -89,7 +90,7 @@ class S3Test(ZulipTestCase):
 
         url = upload_message_attachment(
             "dummy.txt", "text/plain", b"zulip!", user_profile, zulip_realm
-        )
+        )[0]
         # Ensure the correct realm id of the target realm is used instead of the bot's realm.
         self.assertTrue(url.startswith(f"/user_uploads/{zulip_realm.id}/"))
 
@@ -98,7 +99,7 @@ class S3Test(ZulipTestCase):
         bucket = create_s3_buckets(settings.S3_AUTH_UPLOADS_BUCKET)[0]
 
         user_profile = self.example_user("hamlet")
-        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+        url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
 
         path_id = re.sub(r"/user_uploads/", "", url)
         self.assertIsNotNone(bucket.Object(path_id).get())
@@ -113,7 +114,7 @@ class S3Test(ZulipTestCase):
         user_profile = self.example_user("hamlet")
         path_ids = []
         for n in range(1, 5):
-            url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+            url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
             path_id = re.sub(r"/user_uploads/", "", url)
             self.assertIsNotNone(bucket.Object(path_id).get())
             path_ids.append(path_id)
@@ -146,14 +147,14 @@ class S3Test(ZulipTestCase):
         user_profile = self.example_user("hamlet")
         path_ids = []
         for n in range(1, 5):
-            url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)
+            url = upload_message_attachment("dummy.txt", "text/plain", b"zulip!", user_profile)[0]
             path_ids.append(re.sub(r"/user_uploads/", "", url))
 
         # Put an image in, which gets thumbnailed
         with self.captureOnCommitCallbacks(execute=True):
             url = upload_message_attachment(
                 "img.png", "image/png", read_test_image_file("img.png"), user_profile
-            )
+            )[0]
             image_path_id = re.sub(r"/user_uploads/", "", url)
             path_ids.append(image_path_id)
 
@@ -192,7 +193,7 @@ class S3Test(ZulipTestCase):
         redirect_url = response["Location"]
         path = urlsplit(redirect_url).path
         assert path.startswith("/")
-        key = path[len("/") :]
+        key = path.removeprefix("/")
         self.assertEqual(b"zulip!", bucket.Object(key).get()["Body"].read())
 
         prefix = f"/internal/s3/{settings.S3_AUTH_UPLOADS_BUCKET}.s3.amazonaws.com/"
@@ -201,7 +202,7 @@ class S3Test(ZulipTestCase):
         redirect_url = response["X-Accel-Redirect"]
         path = urlsplit(redirect_url).path
         assert path.startswith(prefix)
-        key = path[len(prefix) :]
+        key = path.removeprefix(prefix)
         self.assertEqual(b"zulip!", bucket.Object(key).get()["Body"].read())
 
         # Check the download endpoint
@@ -211,7 +212,7 @@ class S3Test(ZulipTestCase):
         redirect_url = response["X-Accel-Redirect"]
         path = urlsplit(redirect_url).path
         assert path.startswith(prefix)
-        key = path[len(prefix) :]
+        key = path.removeprefix(prefix)
         self.assertEqual(b"zulip!", bucket.Object(key).get()["Body"].read())
 
         # Now try the endpoint that's supposed to return a temporary URL for access
@@ -231,7 +232,7 @@ class S3Test(ZulipTestCase):
         redirect_url = response["X-Accel-Redirect"]
         path = urlsplit(redirect_url).path
         assert path.startswith(prefix)
-        key = path[len(prefix) :]
+        key = path.removeprefix(prefix)
         self.assertEqual(b"zulip!", bucket.Object(key).get()["Body"].read())
 
         # The original url shouldn't work when logged out:
@@ -278,7 +279,7 @@ class S3Test(ZulipTestCase):
         self.assertEqual(base, url[: len(base)])
 
         # Try hitting the equivalent `/user_avatars` endpoint
-        wrong_url = "/user_avatars/" + url[len(base) :]
+        wrong_url = "/user_avatars/" + url.removeprefix(base)
         result = self.client_get(wrong_url)
         self.assertEqual(result.status_code, 301)
         self.assertEqual(result["Location"], url)
@@ -321,7 +322,9 @@ class S3Test(ZulipTestCase):
             self.client_post("/json/users/me/avatar", {"file": image_file})
 
         source_user_profile = self.example_user("hamlet")
-        target_user_profile = self.example_user("othello")
+        target_user_profile = do_create_user(
+            "user@zulip.com", "password", get_realm("zulip"), "user", acting_user=None
+        )
 
         copy_default_settings(source_user_profile, target_user_profile)
 

@@ -4,14 +4,12 @@ const display_recipient_users_schema = z.object({
     id: z.number(),
     email: z.string(),
     full_name: z.string(),
-    is_mirror_dummy: z.boolean(),
 });
 
 export const message_edit_history_schema = z.array(
     z.object({
         prev_content: z.optional(z.string()),
         prev_rendered_content: z.optional(z.string()),
-        prev_rendered_content_version: z.optional(z.number()),
         prev_stream: z.optional(z.number()),
         prev_topic: z.optional(z.string()),
         stream: z.optional(z.number()),
@@ -27,12 +25,6 @@ const message_reaction_schema = z.array(
         emoji_code: z.string(),
         reaction_type: z.enum(["unicode_emoji", "realm_emoji", "zulip_extra_emoji"]),
         user_id: z.number(),
-        user: z.object({
-            id: z.number(),
-            email: z.string(),
-            full_name: z.string(),
-            is_mirror_dummy: z.boolean().nullish(),
-        }),
     }),
 );
 

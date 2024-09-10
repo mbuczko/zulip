@@ -18,7 +18,7 @@ from zerver.lib.cache import (
 )
 from zerver.lib.create_user import get_display_email_address
 from zerver.lib.i18n import get_language_name
-from zerver.lib.queue import queue_json_publish
+from zerver.lib.queue import queue_event_on_commit
 from zerver.lib.send_email import FromAddress, clear_scheduled_emails, send_email
 from zerver.lib.timezone import canonicalize_timezone
 from zerver.lib.upload import delete_avatar_image
@@ -41,8 +41,9 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.models.clients import get_client
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.users import bot_owner_user_ids, get_user_profile_by_id
-from zerver.tornado.django_api import send_event, send_event_on_commit
+from zerver.tornado.django_api import send_event_on_commit
 
 
 def send_user_email_update_event(user_profile: UserProfile) -> None:
@@ -141,7 +142,7 @@ def do_change_user_delivery_email(user_profile: UserProfile, new_email: str) -> 
         realm=user_profile.realm,
         acting_user=user_profile,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_EMAIL_CHANGED,
+        event_type=AuditLogEventType.USER_EMAIL_CHANGED,
         event_time=event_time,
     )
 
@@ -208,15 +209,19 @@ def do_change_password(user_profile: UserProfile, password: str, commit: bool = 
         realm=user_profile.realm,
         acting_user=user_profile,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_PASSWORD_CHANGED,
+        event_type=AuditLogEventType.USER_PASSWORD_CHANGED,
         event_time=event_time,
     )
 
 
+@transaction.atomic(savepoint=False)
 def do_change_full_name(
     user_profile: UserProfile, full_name: str, acting_user: UserProfile | None
 ) -> None:
     old_name = user_profile.full_name
+    if old_name == full_name:
+        return
+
     user_profile.full_name = full_name
     user_profile.save(update_fields=["full_name"])
     event_time = timezone_now()
@@ -224,18 +229,18 @@ def do_change_full_name(
         realm=user_profile.realm,
         acting_user=acting_user,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_FULL_NAME_CHANGED,
+        event_type=AuditLogEventType.USER_FULL_NAME_CHANGED,
         event_time=event_time,
         extra_data={RealmAuditLog.OLD_VALUE: old_name, RealmAuditLog.NEW_VALUE: full_name},
     )
     payload = dict(user_id=user_profile.id, full_name=user_profile.full_name)
-    send_event(
+    send_event_on_commit(
         user_profile.realm,
         dict(type="realm_user", op="update", person=payload),
         get_user_ids_who_can_access_user(user_profile),
     )
     if user_profile.is_bot:
-        send_event(
+        send_event_on_commit(
             user_profile.realm,
             dict(type="realm_bot", op="update", bot=payload),
             bot_owner_user_ids(user_profile),
@@ -286,11 +291,12 @@ def do_change_tos_version(user_profile: UserProfile, tos_version: str | None) ->
         realm=user_profile.realm,
         acting_user=user_profile,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_TERMS_OF_SERVICE_VERSION_CHANGED,
+        event_type=AuditLogEventType.USER_TERMS_OF_SERVICE_VERSION_CHANGED,
         event_time=event_time,
     )
 
 
+@transaction.atomic(durable=True)
 def do_regenerate_api_key(user_profile: UserProfile, acting_user: UserProfile) -> str:
     old_api_key = user_profile.api_key
     new_api_key = generate_api_key()
@@ -307,12 +313,12 @@ def do_regenerate_api_key(user_profile: UserProfile, acting_user: UserProfile) -
         realm=user_profile.realm,
         acting_user=acting_user,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_API_KEY_CHANGED,
+        event_type=AuditLogEventType.USER_API_KEY_CHANGED,
         event_time=event_time,
     )
 
     if user_profile.is_bot:
-        send_event(
+        send_event_on_commit(
             user_profile.realm,
             dict(
                 type="realm_bot",
@@ -326,7 +332,7 @@ def do_regenerate_api_key(user_profile: UserProfile, acting_user: UserProfile) -
         )
 
     event = {"type": "clear_push_device_tokens", "user_profile_id": user_profile.id}
-    queue_json_publish("deferred_work", event)
+    queue_event_on_commit("deferred_work", event)
 
     return new_api_key
 
@@ -386,7 +392,7 @@ def do_change_avatar_fields(
     RealmAuditLog.objects.create(
         realm=user_profile.realm,
         modified_user=user_profile,
-        event_type=RealmAuditLog.USER_AVATAR_SOURCE_CHANGED,
+        event_type=AuditLogEventType.USER_AVATAR_SOURCE_CHANGED,
         extra_data={"avatar_source": avatar_source},
         event_time=event_time,
         acting_user=acting_user,
@@ -442,7 +448,7 @@ def do_change_user_setting(
 
     RealmAuditLog.objects.create(
         realm=user_profile.realm,
-        event_type=RealmAuditLog.USER_SETTING_CHANGED,
+        event_type=AuditLogEventType.USER_SETTING_CHANGED,
         event_time=event_time,
         acting_user=acting_user,
         modified_user=user_profile,

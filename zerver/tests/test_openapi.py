@@ -1,9 +1,6 @@
-import inspect
 import os
-import types
-from collections import abc
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Union, get_args, get_origin
+from collections.abc import Callable, Mapping
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import yaml
@@ -12,7 +9,7 @@ from django.urls import URLPattern
 from django.utils import regex_helper
 from pydantic import TypeAdapter
 
-from zerver.lib.request import _REQ, arguments_map
+from zerver.lib.request import arguments_map
 from zerver.lib.rest import rest_dispatch
 from zerver.lib.test_classes import ZulipTestCase
 from zerver.lib.typed_endpoint import parse_view_func_signature
@@ -45,6 +42,7 @@ VARMAP = {
     "boolean": bool,
     "object": dict,
     "NoneType": type(None),
+    "number": float,
 }
 
 
@@ -74,7 +72,7 @@ class OpenAPIToolsTest(ZulipTestCase):
     """
 
     def test_get_openapi_fixture(self) -> None:
-        actual = get_openapi_fixture(TEST_ENDPOINT, TEST_METHOD, TEST_RESPONSE_BAD_REQ)
+        actual = get_openapi_fixture(TEST_ENDPOINT, TEST_METHOD, TEST_RESPONSE_BAD_REQ)[0]["value"]
         expected = {
             "code": "BAD_REQUEST",
             "msg": "You don't have permission to edit this message",
@@ -216,8 +214,6 @@ class OpenAPIArgumentsTest(ZulipTestCase):
         ## And this one isn't, and isn't really representable
         # "/user_uploads/{realm_id_str}/{filename}",
         #### These realm administration settings are valuable to document:
-        # List data exports for organization (GET) or request one (POST)
-        "/export/realm",
         # Delete a data export.
         "/export/realm/{export_id}",
         # Manage default streams and default stream groups
@@ -310,43 +306,6 @@ so maybe we shouldn't mark it as intentionally undocumented in the URLs.
                 msg += f"\n + {undocumented_path}"
             raise AssertionError(msg)
 
-    def get_type_by_priority(
-        self, types: Sequence[type | tuple[type, object]]
-    ) -> type | tuple[type, object]:
-        priority = {list: 1, dict: 2, str: 3, int: 4, bool: 5}
-        tyiroirp = {1: list, 2: dict, 3: str, 4: int, 5: bool}
-        val = 6
-        for t in types:
-            if isinstance(t, tuple):
-                return t  # e.g. (list, dict) or (list, str)
-            v = priority.get(t, 6)
-            if v < val:
-                val = v
-        return tyiroirp.get(val, types[0])
-
-    def get_standardized_argument_type(self, t: Any) -> type | tuple[type, object]:
-        """Given a type from the typing module such as List[str] or Union[str, int],
-        convert it into a corresponding Python type. Unions are mapped to a canonical
-        choice among the options.
-        E.g. typing.Union[typing.List[typing.Dict[str, typing.Any]], NoneType]
-        needs to be mapped to list."""
-
-        origin = get_origin(t)
-
-        if origin is None:
-            # Then it's most likely one of the fundamental data types
-            # I.E. Not one of the data types from the "typing" module.
-            return t
-        elif origin in (Union, types.UnionType):
-            subtypes = [self.get_standardized_argument_type(st) for st in get_args(t)]
-            return self.get_type_by_priority(subtypes)
-        elif origin in [list, abc.Sequence]:
-            [st] = get_args(t)
-            return (list, self.get_standardized_argument_type(st))
-        elif origin in [dict, abc.Mapping]:
-            return dict
-        raise AssertionError(f"Unknown origin {origin}")
-
     def render_openapi_type_exception(
         self,
         function: Callable[..., HttpResponse],
@@ -430,17 +389,25 @@ do not match the types declared in the implementation of {function.__name__}.\n"
             # matching that of our OpenAPI spec. If not so, hint that the
             # Json[T] wrapper might be missing from the type annotation.
             if actual_param.request_var_name in json_request_var_names:
-                self.assertEqual(
-                    actual_param_schema.get("contentMediaType"),
-                    "application/json",
-                    USE_JSON_CONTENT_TYPE_HINT.format(
-                        param_name=actual_param.param_name,
-                        param_type=actual_param.param_type,
-                    ),
-                )
-                # actual_param_schema is a json_schema. Reference:
-                # https://docs.pydantic.dev/latest/api/json_schema/#pydantic.json_schema.GenerateJsonSchema.json_schema
-                actual_param_schema = actual_param_schema["contentSchema"]
+                # skipping this check for send_message_backend 'to' parameter because it is a
+                # special case where the content type of the parameter is application/json but the
+                # parameter may or may not be JSON encoded since previously we also accepted a raw
+                # string and some ad-hoc bot might still depend on sending a raw string.
+                if (
+                    function.__name__ != "send_message_backend"
+                    or actual_param.param_name != "req_to"
+                ):
+                    self.assertEqual(
+                        actual_param_schema.get("contentMediaType"),
+                        "application/json",
+                        USE_JSON_CONTENT_TYPE_HINT.format(
+                            param_name=actual_param.param_name,
+                            param_type=actual_param.param_type,
+                        ),
+                    )
+                    # actual_param_schema is a json_schema. Reference:
+                    # https://docs.pydantic.dev/latest/api/json_schema/#pydantic.json_schema.GenerateJsonSchema.json_schema
+                    actual_param_schema = actual_param_schema["contentSchema"]
             elif "contentMediaType" in actual_param_schema:
                 function_schema_type = schema_type(actual_param_schema, defs_mapping)
                 # We do not specify that the content type of int or bool
@@ -468,79 +435,14 @@ do not match the types declared in the implementation of {function.__name__}.\n"
         OpenAPI data defines a different type than that actually accepted by the function.
         Otherwise, we print out the exact differences for convenient debugging and raise an
         AssertionError."""
-        # Iterate through the decorators to find the original function, wrapped
-        # by has_request_variables/typed_endpoint, so we can parse its
+        # Iterate through the decorators to find the original
+        # function, wrapped by typed_endpoint, so we can parse its
         # arguments.
-        use_endpoint_decorator = False
         while (wrapped := getattr(function, "__wrapped__", None)) is not None:
-            # TODO: Remove this check once we replace has_request_variables with
-            # typed_endpoint.
-            if getattr(function, "use_endpoint", False):
-                use_endpoint_decorator = True
             function = wrapped
 
-        if use_endpoint_decorator:
+        if len(openapi_parameters) > 0:
             return self.validate_json_schema(function, openapi_parameters)
-
-        openapi_params: set[tuple[str, type | tuple[type, object]]] = set()
-        json_params: dict[str, type | tuple[type, object]] = {}
-        for openapi_parameter in openapi_parameters:
-            name = openapi_parameter.name
-            if openapi_parameter.json_encoded:
-                # If content_type is application/json, then the
-                # parameter needs to be handled specially, as REQ can
-                # either return the application/json as a string or it
-                # can either decode it and return the required
-                # elements. For example `to` array in /messages: POST
-                # is processed by REQ as a string and then its type is
-                # checked in the view code.
-                #
-                # Meanwhile `profile_data` in /users/{user_id}: GET is
-                # taken as array of objects. So treat them separately.
-                json_params[name] = schema_type(openapi_parameter.value_schema)
-                continue
-            openapi_params.add((name, schema_type(openapi_parameter.value_schema)))
-
-        function_params: set[tuple[str, type | tuple[type, object]]] = set()
-
-        for pname, defval in inspect.signature(function).parameters.items():
-            defval = defval.default
-            if isinstance(defval, _REQ):
-                # TODO: The below inference logic in cases where
-                # there's a converter function declared is incorrect.
-                # Theoretically, we could restructure the converter
-                # function model so that we can check what type it
-                # excepts to be passed to make validation here
-                # possible.
-
-                vtype = self.get_standardized_argument_type(function.__annotations__[pname])
-                vname = defval.post_var_name
-                assert vname is not None
-                if vname in json_params:
-                    # Here we have two cases.  If the REQ type is
-                    # string then there is no point in comparing as
-                    # JSON can always be returned as string.  Ideally,
-                    # we wouldn't use REQ for a JSON object without a
-                    # validator in these cases, but it does happen.
-                    #
-                    # If the REQ type is not string then, insert the
-                    # REQ and OpenAPI data types of the variable in
-                    # the respective sets so that they can be dealt
-                    # with later.  In either case remove the variable
-                    # from `json_params`.
-                    if vtype is str:
-                        json_params.pop(vname, None)
-                        continue
-                    else:
-                        openapi_params.add((vname, json_params[vname]))
-                        json_params.pop(vname, None)
-                function_params.add((vname, vtype))
-
-        # After the above operations `json_params` should be empty.
-        assert len(json_params) == 0
-        diff = openapi_params - function_params
-        if diff:  # nocoverage
-            self.render_openapi_type_exception(function, openapi_params, function_params, diff)
 
     def check_openapi_arguments_for_view(
         self,
@@ -550,7 +452,7 @@ do not match the types declared in the implementation of {function.__name__}.\n"
         method: str,
         tags: set[str],
     ) -> None:
-        # Our accounting logic in the `has_request_variables()`
+        # Our accounting logic in the `typed_endpoint`
         # code means we have the list of all arguments
         # accepted by every view function in arguments_map.
         accepted_arguments = set(arguments_map[function_name])
@@ -575,7 +477,7 @@ so maybe we shouldn't include it in pending_endpoints.
 
             try:
                 # Don't include OpenAPI parameters that live in
-                # the path; these are not extracted by REQ.
+                # the path; these are not extracted by typed_endpoint.
                 openapi_parameters = get_openapi_parameters(
                     url_pattern, method, include_url_parameters=False
                 )
@@ -591,8 +493,7 @@ so maybe we shouldn't include it in pending_endpoints.
             #   some processing to match with OpenAPI rules
             #
             # * accepted_arguments is the full set of arguments
-            #   this method accepts (from the REQ declarations in
-            #   code).
+            #   this method accepts.
             #
             # * The documented parameters for the endpoint as recorded in our
             #   OpenAPI data in zerver/openapi/zulip.yaml.
@@ -625,12 +526,12 @@ so maybe we shouldn't include it in pending_endpoints.
 
     def test_openapi_arguments(self) -> None:
         """This end-to-end API documentation test compares the arguments
-        defined in the actual code using @has_request_variables and
-        REQ(), with the arguments declared in our API documentation
+        defined in the actual code using @typed_endpoint,
+        with the arguments declared in our API documentation
         for every API endpoint in Zulip.
 
         First, we import the fancy-Django version of zproject/urls.py
-        by doing this, each has_request_variables wrapper around each
+        by doing this, each typed_endpoint wrapper around each
         imported view function gets called to generate the wrapped
         view function and thus filling the global arguments_map variable.
         Basically, we're exploiting code execution during import.
@@ -638,7 +539,7 @@ so maybe we shouldn't include it in pending_endpoints.
             Then we need to import some view modules not already imported in
         urls.py. We use this different syntax because of the linters complaining
         of an unused import (which is correct, but we do this for triggering the
-        has_request_variables decorator).
+        typed_endpoint decorator).
 
             At the end, we perform a reverse mapping test that verifies that
         every URL pattern defined in the OpenAPI documentation actually exists
@@ -673,11 +574,11 @@ so maybe we shouldn't include it in pending_endpoints.
                 if function is get_events:
                     # Work around the fact that the registered
                     # get_events view function isn't where we do
-                    # @has_request_variables.
+                    # @typed_endpoint.
                     #
                     # TODO: Make this configurable via an optional argument
-                    # to has_request_variables, e.g.
-                    # @has_request_variables(view_func_name="zerver.tornado.views.get_events")
+                    # to typed_endpoint, e.g.
+                    # @typed_endpoint(view_func_name="zerver.tornado.views.get_events")
                     function = get_events_backend
 
                 function_name = f"{function.__module__}.{function.__name__}"
@@ -1038,9 +939,17 @@ class OpenAPIAttributesTest(ZulipTestCase):
                             )
                         continue
                     validate_schema(schema)
-                    assert validate_against_openapi_schema(
-                        schema["example"], path, method, status_code
-                    )
+                    if "example" not in schema:
+                        assert "examples" in response["content"]["application/json"]
+                        examples = response["content"]["application/json"]["examples"]
+                        for example in examples:
+                            assert validate_against_openapi_schema(
+                                examples[example]["value"], path, method, status_code
+                            )
+                    else:
+                        assert validate_against_openapi_schema(
+                            schema["example"], path, method, status_code
+                        )
 
 
 class OpenAPIRegexTest(ZulipTestCase):

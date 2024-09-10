@@ -89,15 +89,19 @@
         box-shadow: inset 0 1px 0 hsl(0deg 0% 0% / 20%);
     }
 
-    .enter_sends_choices {
-        color: hsl(236deg 33% 90%);
-
+    .enter_sends_choices,
+    #user_enter_sends_label,
+    #realm_enter_sends_label {
         & kbd {
             background-color: hsl(211deg 29% 14%);
             border-color: hsl(211deg 29% 14%);
             text-shadow: none;
             color: hsl(236deg 33% 90%);
         }
+    }
+
+    .enter_sends_choices {
+        color: hsl(236deg 33% 90%);
 
         .enter_sends_minor {
             color: hsl(0deg 0% 80%);
@@ -342,8 +346,13 @@
         color: inherit;
     }
 
-    /* these are converting grey things to "new grey" */
-    :disabled,
+    /* these are converting grey things to "new grey".
+       :disabled rules are exploded for CSS selector performance reasons. */
+    button:disabled,
+    option:disabled,
+    select:disabled,
+    textarea:disabled,
+    input:disabled,
     input:not([type="radio"]):read-only,
     textarea:read-only,
     #organization-permissions .dropdown-widget-button:disabled,
@@ -453,12 +462,6 @@
             .search_icon {
             opacity: 0.75;
         }
-
-        /* Colors are inherited in light theme */
-        .navbar-search .search_icon,
-        .navbar-search .search_close_button {
-            color: hsl(0deg 0% 78%);
-        }
     }
 
     .new-style .button.no-style {
@@ -500,7 +503,6 @@
     }
 
     #compose-content {
-        background-color: hsl(228deg 11% 17%);
         border-color: hsl(0deg 0% 0% / 60%);
     }
 
@@ -515,10 +517,6 @@
     .overlay-message-row .overlay-message-info-box,
     .preview_message_area {
         border-color: hsl(0deg 0% 0% / 40%);
-    }
-
-    .preview_message_area {
-        background-color: hsl(0deg 0% 0% / 20%);
     }
 
     .top-navbar-border {
@@ -537,7 +535,7 @@
         background-color: hsl(212deg 28% 8% / 75%);
     }
 
-    & div.overlay .flex.overlay-content > div,
+    & div.overlay .flex.overlay-content > .overlay-container,
     #settings_page,
     .informational-overlays .overlay-content {
         box-shadow: 0 0 30px hsl(212deg 32% 7%);
@@ -546,7 +544,7 @@
     #draft_overlay,
     #scheduled_messages_overlay_container,
     #message-edit-history-overlay-container {
-        .flex.overlay-content > div {
+        .flex.overlay-content > .overlay-container {
             box-shadow: 0 0 30px hsl(213deg 31% 0%);
             background-color: var(--color-background);
         }
@@ -702,10 +700,9 @@
     .subscriber-list-box .subscriber_list_container .subscriber-list td,
     .member-list-box,
     .member-list-box .member_list_container .member-list td,
-    #subscription_overlay .subsection-parent div,
     #subscription_overlay .settings-radio-input-parent,
-    #settings_page .sidebar-wrapper,
-    #settings_page .sidebar-wrapper *,
+    #settings_page .sidebar,
+    #settings_page .sidebar .sidebar-item,
     #recent_view_table table td {
         border-color: hsl(0deg 0% 0% / 20%);
     }
@@ -918,7 +915,7 @@
         box-shadow: 0 0 0 1px hsl(0deg 0% 0% / 33%);
     }
 
-    .collapse-settings-btn:hover {
+    .collapse-settings-button:hover {
         color: hsl(200deg 79% 66%);
     }
 

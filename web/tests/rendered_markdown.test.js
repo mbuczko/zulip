@@ -424,7 +424,10 @@ run_test("timestamp", ({mock_template}) => {
     rm.update_elements($content);
 
     // Final asserts
-    assert.equal($timestamp.html(), '<i class="fa fa-clock-o"></i>\nThu, Jan 1, 1970, 12:00 AM');
+    assert.equal(
+        $timestamp.html(),
+        '<span class="timestamp-content-wrapper">\n    <i class="zulip-icon zulip-icon-clock markdown-timestamp-icon"></i>Thu, Jan 1, 1970, 12:00 AM</span>',
+    );
     assert.equal($timestamp_invalid.text(), "never-been-set");
 });
 
@@ -443,11 +446,17 @@ run_test("timestamp-twenty-four-hour-time", ({mock_template, override}) => {
     // We will temporarily change the 24h setting for this test.
     override(user_settings, "twenty_four_hour_time", true);
     rm.update_elements($content);
-    assert.equal($timestamp.html(), '<i class="fa fa-clock-o"></i>\nWed, Jul 15, 2020, 20:40');
+    assert.equal(
+        $timestamp.html(),
+        '<span class="timestamp-content-wrapper">\n    <i class="zulip-icon zulip-icon-clock markdown-timestamp-icon"></i>Wed, Jul 15, 2020, 20:40</span>',
+    );
 
     override(user_settings, "twenty_four_hour_time", false);
     rm.update_elements($content);
-    assert.equal($timestamp.html(), '<i class="fa fa-clock-o"></i>\nWed, Jul 15, 2020, 8:40 PM');
+    assert.equal(
+        $timestamp.html(),
+        '<span class="timestamp-content-wrapper">\n    <i class="zulip-icon zulip-icon-clock markdown-timestamp-icon"></i>Wed, Jul 15, 2020, 8:40 PM</span>',
+    );
 });
 
 run_test("timestamp-error", () => {
@@ -504,6 +513,7 @@ run_test("spoiler-header", () => {
     const toggle_button_html =
         '<span class="spoiler-button" aria-expanded="false"><span class="spoiler-arrow"></span></span>';
     $header.html(label);
+    $header.set_find_results("p", $.create("p"));
     rm.update_elements($content);
     assert.equal(label, $header.html());
     assert.equal($appended.selector, toggle_button_html);
@@ -523,6 +533,7 @@ run_test("spoiler-header-empty-fill", () => {
     const toggle_button_html =
         '<span class="spoiler-button" aria-expanded="false"><span class="spoiler-arrow"></span></span>';
     $header.empty();
+    $header.set_find_results("p", $.create("p"));
     rm.update_elements($content);
     assert.equal($appended[0].selector, "<p>");
     assert.equal($appended[0].text(), $t({defaultMessage: "Spoiler"}));

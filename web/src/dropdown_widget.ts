@@ -35,7 +35,7 @@ export type Option = {
     stream?: StreamSubscription;
 };
 
-type DropdownWidgetOptions = {
+export type DropdownWidgetOptions = {
     widget_name: string;
     // You can bold the selected `option` by setting `option.bold_current_selection` to `true`.
     // Currently, not implemented for stream names.
@@ -118,7 +118,6 @@ export class DropdownWidget {
         // These properties can override any tippy props.
         this.tippy_props = options.tippy_props ?? {};
         this.list_widget = undefined;
-        this.instance = undefined;
         this.default_id = options.default_id;
         this.current_value = this.default_id;
         this.unique_id_type = options.unique_id_type;
@@ -243,7 +242,7 @@ export class DropdownWidget {
             return;
         }
 
-        this.instance = tippy.delegate(delegate_container, {
+        tippy.delegate(delegate_container, {
             ...popover_menus.default_popover_props,
             target: this.widget_selector,
             // Custom theme defined in popovers.css
@@ -399,7 +398,7 @@ export class DropdownWidget {
                 });
 
                 // Click on item.
-                $popper.one("click", ".list-item", (event) => {
+                $popper.on("click", ".list-item", (event) => {
                     const selected_unique_id = $(event.currentTarget).attr("data-unique-id");
                     assert(selected_unique_id !== undefined);
                     this.current_value = selected_unique_id;
@@ -430,7 +429,7 @@ export class DropdownWidget {
                     $(this.widget_selector).trigger("focus");
                 }
                 this.on_hidden_callback(instance);
-                this.instance = undefined;
+                instance.destroy();
             },
             ...this.tippy_props,
         });

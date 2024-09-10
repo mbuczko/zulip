@@ -204,14 +204,20 @@ def get_schema(endpoint: str, method: str, status_code: str) -> dict[str, Any]:
         return schema
 
 
-def get_openapi_fixture(endpoint: str, method: str, status_code: str = "200") -> dict[str, Any]:
+def get_openapi_fixture(
+    endpoint: str, method: str, status_code: str = "200"
+) -> list[dict[str, Any]]:
     """Fetch a fixture from the full spec object."""
-    return get_schema(endpoint, method, status_code)["example"]
-
-
-def get_openapi_fixture_description(endpoint: str, method: str, status_code: str = "200") -> str:
-    """Fetch a fixture from the full spec object."""
-    return get_schema(endpoint, method, status_code)["description"]
+    if "example" not in get_schema(endpoint, method, status_code):
+        return openapi_spec.openapi()["paths"][endpoint][method.lower()]["responses"][status_code][
+            "content"
+        ]["application/json"]["examples"].values()
+    return [
+        {
+            "description": get_schema(endpoint, method, status_code)["description"],
+            "value": get_schema(endpoint, method, status_code)["example"],
+        }
+    ]
 
 
 def get_curl_include_exclude(endpoint: str, method: str) -> list[dict[str, Any]]:
@@ -279,17 +285,15 @@ def generate_openapi_fixture(endpoint: str, method: str) -> list[str]:
             else:
                 subschema_status_code = status_code
             fixture_dict = get_openapi_fixture(endpoint, method, subschema_status_code)
-            fixture_description = get_openapi_fixture_description(
-                endpoint, method, subschema_status_code
-            ).strip()
-            fixture_json = json.dumps(
-                fixture_dict, indent=4, sort_keys=True, separators=(",", ": ")
-            )
-
-            fixture.extend(fixture_description.splitlines())
-            fixture.append("``` json")
-            fixture.extend(fixture_json.splitlines())
-            fixture.append("```")
+            for example in fixture_dict:
+                fixture_json = json.dumps(
+                    example["value"], indent=4, sort_keys=True, separators=(",", ": ")
+                )
+                if "description" in example:
+                    fixture.extend(example["description"].strip().splitlines())
+                fixture.append("``` json")
+                fixture.extend(fixture_json.splitlines())
+                fixture.append("```")
     return fixture
 
 
@@ -439,9 +443,9 @@ def validate_test_response(request: Request, response: Response) -> bool:
     """
 
     if request.path.startswith("/json/"):
-        path = request.path[len("/json") :]
+        path = request.path.removeprefix("/json")
     elif request.path.startswith("/api/v1/"):
-        path = request.path[len("/api/v1") :]
+        path = request.path.removeprefix("/api/v1")
     else:
         return False
     assert request.method is not None
@@ -567,14 +571,14 @@ def validate_test_request(
     assert request.method is not None
     method = request.method.lower()
     if request.path.startswith("/json/"):
-        url = request.path[len("/json") :]
+        url = request.path.removeprefix("/json")
         # Some JSON endpoints have different parameters compared to
         # their `/api/v1` counterparts.
         if (url, method) in SKIP_JSON:
             return
     else:
         assert request.path.startswith("/api/v1/")
-        url = request.path[len("/api/v1") :]
+        url = request.path.removeprefix("/api/v1")
 
     # TODO: Add support for file upload endpoints that lack the /json/
     # or /api/v1/ prefix.

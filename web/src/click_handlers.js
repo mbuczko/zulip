@@ -366,12 +366,12 @@ export function initialize() {
 
     $("body").on("click", ".message_edit_form .markdown_preview", (e) => {
         e.preventDefault();
-        message_edit.show_preview_area(e.target);
+        message_edit.show_preview_area($(e.target));
     });
 
     $("body").on("click", ".message_edit_form .undo_markdown_preview", (e) => {
         e.preventDefault();
-        message_edit.clear_preview_area(e.target);
+        message_edit.clear_preview_area($(e.target));
     });
 
     // RESOLVED TOPICS
@@ -639,7 +639,7 @@ export function initialize() {
         server_events.restart_get_events({dont_block: true});
     });
 
-    $("#settings_page").on("click", ".collapse-settings-btn", () => {
+    $("#settings_page").on("click", ".collapse-settings-button", () => {
         settings_toggle.toggle_org_setting_collapse();
     });
 

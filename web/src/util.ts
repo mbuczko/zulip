@@ -93,7 +93,10 @@ export const same_recipient = function util_same_recipient(a?: Recipient, b?: Re
     return false;
 };
 
-export const same_sender = function util_same_sender(a: RawMessage, b: RawMessage): boolean {
+export const same_sender = function util_same_sender(
+    a: RawMessage | undefined,
+    b: RawMessage | undefined,
+): boolean {
     return (
         a !== undefined &&
         b !== undefined &&
@@ -197,8 +200,8 @@ export function find_stream_wildcard_mentions(message_content: string): string |
     // We cannot use the exact same regex as the server side uses (in zerver/lib/mention.py)
     // because Safari < 16.4 does not support look-behind assertions.  Reframe the lookbehind of a
     // negative character class as a start-of-string or positive character class.
-    const mention = message_content.match(
-        /(?:^|[\s"'(/<[{])(@\*{2}(all|everyone|stream|channel)\*{2})/,
+    const mention = /(?:^|[\s"'(/<[{])(@\*{2}(all|everyone|stream|channel)\*{2})/.exec(
+        message_content,
     );
     if (mention === null) {
         return null;
@@ -449,4 +452,17 @@ export function format_array_as_list(
 // Returns the remaining time in milliseconds from the start_time and duration.
 export function get_remaining_time(start_time: number, duration: number): number {
     return Math.max(0, start_time + duration - Date.now());
+}
+
+// Helper for shorthand for Typescript to get an item from a list with
+// exactly one item.
+export function the<T>(items: T[] | JQuery<T>): T {
+    if (items.length === 0) {
+        blueslip.error("the: expected only 1 item, got none");
+    } else if (items.length > 1) {
+        blueslip.error("the: expected only 1 item, got more", {
+            num_items: items.length,
+        });
+    }
+    return items[0]!;
 }

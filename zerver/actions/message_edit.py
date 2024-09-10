@@ -2,6 +2,7 @@ import itertools
 from collections import defaultdict
 from collections.abc import Iterable
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -22,7 +23,7 @@ from zerver.actions.message_send import (
     internal_send_stream_message,
     render_incoming_message,
 )
-from zerver.actions.uploads import check_attachment_reference_change
+from zerver.actions.uploads import AttachmentChangeResult, check_attachment_reference_change
 from zerver.actions.user_topics import bulk_do_set_user_topic_visibility_policy
 from zerver.lib.exceptions import (
     JsonableError,
@@ -84,6 +85,12 @@ from zerver.models import (
 from zerver.models.streams import get_stream_by_id_in_realm
 from zerver.models.users import get_system_bot
 from zerver.tornado.django_api import send_event_on_commit
+
+
+@dataclass
+class UpdateMessageResult:
+    changed_message_count: int
+    detached_uploads: list[dict[str, Any]]
 
 
 def subscriber_info(user_id: int) -> dict[str, Any]:
@@ -436,7 +443,7 @@ def do_update_message(
     rendering_result: MessageRenderingResult | None,
     prior_mention_user_ids: set[int],
     mention_data: MentionData | None = None,
-) -> int:
+) -> UpdateMessageResult:
     """
     The main function for message editing.  A message edit event can
     modify:
@@ -467,6 +474,7 @@ def do_update_message(
     }
 
     realm = user_profile.realm
+    attachment_reference_change = AttachmentChangeResult(False, [])
 
     stream_being_edited = None
     if target_message.is_stream_message():
@@ -508,17 +516,16 @@ def do_update_message(
         target_message.rendered_content_version = markdown_version
         event["content"] = content
         event["rendered_content"] = rendering_result.rendered_content
-        event["prev_rendered_content_version"] = target_message.rendered_content_version
         event["is_me_message"] = Message.is_status_message(
             content, rendering_result.rendered_content
         )
 
         # target_message.has_image and target_message.has_link will have been
         # already updated by Markdown rendering in the caller.
-        target_message.has_attachment = check_attachment_reference_change(
+        attachment_reference_change = check_attachment_reference_change(
             target_message, rendering_result
         )
-
+        target_message.has_attachment = attachment_reference_change.did_attachment_change
         if target_message.is_stream_message():
             if topic_name is not None:
                 new_topic_name = topic_name
@@ -1140,7 +1147,9 @@ def do_update_message(
             changed_messages_count,
         )
 
-    return changed_messages_count
+    return UpdateMessageResult(
+        changed_messages_count, attachment_reference_change.detached_attachments
+    )
 
 
 def check_time_limit_for_change_all_propagate_mode(
@@ -1245,7 +1254,7 @@ def check_update_message(
     send_notification_to_old_thread: bool = True,
     send_notification_to_new_thread: bool = True,
     content: str | None = None,
-) -> int:
+) -> UpdateMessageResult:
     """This will update a message given the message id and user profile.
     It checks whether the user profile has the permission to edit the message
     and raises a JsonableError if otherwise.
@@ -1256,16 +1265,16 @@ def check_update_message(
     # If there is a change to the content, check that it hasn't been too long
     # Allow an extra 20 seconds since we potentially allow editing 15 seconds
     # past the limit, and in case there are network issues, etc. The 15 comes
-    # from (min_seconds_to_edit + seconds_left_buffer) in message_edit.js; if
-    # you change this value also change those two parameters in message_edit.js.
+    # from (min_seconds_to_edit + seconds_left_buffer) in message_edit.ts; if
+    # you change this value also change those two parameters in message_edit.ts.
     edit_limit_buffer = 20
     if content is not None:
         validate_user_can_edit_message(user_profile, message, edit_limit_buffer)
 
     # The zerver/views/message_edit.py call point already strips this
-    # via REQ_topic; so we can delete this line if we arrange a
+    # via OptionalTopic; so we can delete this line if we arrange a
     # contract where future callers in the embedded bots system strip
-    # use REQ_topic as well (or otherwise are guaranteed to strip input).
+    # use OptionalTopic as well (or otherwise are guaranteed to strip input).
     if topic_name is not None:
         topic_name = topic_name.strip()
         if topic_name == message.topic_name():
@@ -1339,7 +1348,6 @@ def check_update_message(
             check_user_group_mention_allowed(user_profile, mentioned_group_ids)
 
     new_stream = None
-    number_changed = 0
 
     if stream_id is not None:
         assert message.is_stream_message()
@@ -1370,7 +1378,7 @@ def check_update_message(
     ):
         check_time_limit_for_change_all_propagate_mode(message, user_profile, topic_name, stream_id)
 
-    number_changed = do_update_message(
+    updated_message_result = do_update_message(
         user_profile,
         message,
         new_stream,
@@ -1396,4 +1404,4 @@ def check_update_message(
         }
         queue_json_publish("embed_links", event_data)
 
-    return number_changed
+    return updated_message_result

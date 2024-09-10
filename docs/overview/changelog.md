@@ -15,9 +15,42 @@ _Unreleased_
 
 #### Upgrade notes for 10.0
 
-- None yet.
+- The `SOCIAL_AUTH_SYNC_CUSTOM_ATTRS_DICT` setting is deprecated in favor of the
+  more general `SOCIAL_AUTH_SYNC_ATTRS_DICT` setting structure, but still works in
+  this release for a smooth upgrade experience. The new setting supports
+  synchronizing role, and otherwise functions like the old one, except Zulip
+  custom profile fields are referred to with the prefix `custom__`. See the updated
+  comment documentation in `/etc/zulip/settings.py` for details.
 
 ## Zulip Server 9.x series
+
+### Zulip Server 9.1
+
+_Released 2024-08-02_
+
+- Clarified upgrade notes and installer error messages. Improved
+  documentation to smooth the process of upgrading Ubuntu 20.04 to
+  22.04 before upgrading to Zulip 9.x. Installations currently running
+  Ubuntu 20.04 should first upgrade to the latest Zulip 8.x release,
+  and then follow the [Zulip host OS upgrade
+  instructions](../production/upgrade.md#upgrading-the-operating-system)
+  in preparation for upgrading to Zulip 9.x.
+- Improved web and mobile app loading times and bandwidth usage by
+  tuning API response compression and removing some unnecessary
+  entropy in user object payloads.
+- Fixed how Zulip handles a GitHub quirk, to avoid duplicate
+  notifications when pull request reviews are submitted.
+- Fixed a rare race condition that could cause uploaded images to be
+  displayed as a perpetual loading spinner.
+- Fixed video player controls appearing in the lightbox bottom
+  carousel.
+- Fix several minor visual bugs, most notably with composebox
+  typeahead overflowing incorrectly.
+- Fixed a subtle live-update bug rerendering the inbox view.
+- Fixed a couple of subtle performance issues involving the analytics
+  cron job and listing invitations in organization settings.
+- Updated documentation for a couple of integrations.
+- Updated translations.
 
 ### Zulip Server 9.0
 
@@ -210,6 +243,9 @@ _Released 2024-07-25_
 
 #### Upgrade notes for 9.0
 
+- Servers running Ubuntu 20.04 must [upgrade their operating system to Ubuntu
+  22.04](../production/upgrade.md#upgrading-the-operating-system)
+  before upgrading to Zulip 9.0.
 - This release introduces a new [Zulip updates](https://zulip.com/help/configure-automated-notices#zulip-update-announcements) feature, which
   announces significant product changes and new features via automated
   messages to a configurable channel. Generally, these announcements will
@@ -277,6 +313,24 @@ _Released 2024-07-25_
 [thumbor-remediation-topic]: https://chat.zulip.org/#narrow/stream/31-production-help/topic/THUMBNAIL_IMAGES.20remediation
 
 ## Zulip Server 8.x series
+
+### Zulip Server 8.5
+
+_Released 2024-07-31_
+
+- Fixed failures installing/upgrading Debian systems by removing the
+  Apache Arrow apt repository as a dependency, which suffers from an
+  annual problem with expired GPG signatures.
+- Improved documentation for upgrading the Ubuntu version.
+- Fixed `manage.py register_server --rotate-key` crashing without
+  having written its secrets if the `zulip` user had permission to write
+  to `/etc/zulip/zulip-secrets.conf`, but not its parent directory.
+- Fixed client-provided HTTP authentication headers being incorrectly
+  forwarded in S3 requests, causing authentication errors.
+- Removed the Gitter data import tool (Gitter no longer exports data
+  in the format it supported).
+- Upgraded Python dependencies.
+- Updated translations.
 
 ### Zulip Server 8.4
 
@@ -631,7 +685,7 @@ _Released 2023-11-16_
   Zulip does not yet support PostgreSQL 16.
 - Renamed the `reactivate_stream` management command to `unarchive_stream`, to
   match terminology in the app, and [documented
-  it](https://zulip.com/help/archive-a-stream#unarchiving-archived-streams).
+  it](https://zulip.com/help/archive-a-channel#unarchiving-archived-channels).
 - Fixed a regression, introduced in 6.0, where users created via the API or LDAP
   would have English set as their language, ignoring the configured realm
   default.
@@ -682,7 +736,7 @@ _Released 2023-08-25_
   [resolving](https://zulip.com/help/resolve-a-topic) or
   [moving](https://zulip.com/help/move-content-to-another-topic) long topics.
 - Fixed bad rendering of stream links in
-  [stream descriptions](https://zulip.com/help/change-the-stream-description).
+  [stream descriptions](https://zulip.com/help/change-the-channel-description).
 - Fixed broken and misaligned images in Zulip welcome emails.
 - Fixed YouTube video previews to be ordered in the order they are linked, not
   reverse order.
@@ -965,13 +1019,13 @@ _Released 2023-05-19_
   control that was not in the organization's LDAP directory.
 - CVE-2023-32677: Fixed a vulnerability which allowed users to invite new users
   to streams when inviting them to the server, even if they did not have
-  [permission to invite existing users to streams](https://zulip.com/help/configure-who-can-invite-to-streams).
+  [permission to invite existing users to streams](https://zulip.com/help/configure-who-can-invite-to-channels).
   This did not allow users to invite others to streams that they themselves were
   not a member of, and only affected deployments with the rare configuration of
   a permissive
   [realm invitation policy](https://zulip.com/help/restrict-account-creation#change-who-can-send-invitations)
   and a strict
-  [stream invitation policy](https://zulip.com/help/configure-who-can-invite-to-streams).
+  [stream invitation policy](https://zulip.com/help/configure-who-can-invite-to-channels).
 - Fixed a bug that could cause duplicate push notifications when using the
   mobile push notifications service.
 - Fixed several bugs in the Zulip server and PostgreSQL version upgrade
@@ -1028,7 +1082,7 @@ _Released 2023-01-23_
   “[delay before sending message notification emails](https://zulip.com/help/email-notifications#delay-before-sending-emails)”
   setting.
 - Fixed an error which prevented users from changing
-  [stream-specific notification settings](https://zulip.com/help/stream-notifications#configure-notifications-for-a-single-stream).
+  [stream-specific notification settings](https://zulip.com/help/channel-notifications#configure-notifications-for-a-single-channel).
 - Fixed the redirect from `/apps` to https://zulip.com/apps/.
 - Started preserving timezone information in
   [Rocket.Chat imports](https://zulip.com/help/import-from-rocketchat).
@@ -1341,7 +1395,7 @@ _Released 2022-06-21_
 - CVE-2022-31017: Fixed message edit event exposure in
   protected-history streams.
   Zulip allows a stream to be configured as [private with protected
-  history](https://zulip.com/help/stream-permissions#stream-privacy-settings),
+  history](https://zulip.com/help/channel-permissions#channel-privacy-settings),
   which means that new subscribers should only see messages sent after
   they join. However, due to a logic bug in Zulip Server 2.1.0 through
   5.2, when a message was edited, the server would incorrectly send an
@@ -2613,7 +2667,7 @@ _Released 2019-12-12_
   setting is disabled. As a result, organization administrators can
   configure this feature entirely in the UI. However, servers that had
   previously [enabled previews of linked
-  websites](https://zulip.com/help/allow-image-link-previews) will
+  websites](https://zulip.com/help/image-video-and-website-previews) will
   lose the setting and need to re-enable it.
 - We rewrote the Google authentication backend to use the
   `python-social-auth` system we use for other third-party
@@ -3044,7 +3098,7 @@ _Released 2018-11-07_
 - Users can now configure email and mobile push notifications for
   all messages in a stream (useful for low-traffic
   streams/organizations), not just for messages mentioning them.
-- New [stream settings](https://zulip.com/help/stream-permissions)
+- New [stream settings](https://zulip.com/help/channel-permissions)
   control whether private stream subscribers can access history
   from before they joined, and allow configuring streams to only
   allow administrators to post.

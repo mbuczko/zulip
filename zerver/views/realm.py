@@ -25,7 +25,6 @@ from zerver.actions.realm_settings import (
     do_set_realm_zulip_update_announcements_stream,
     parse_and_set_setting_value_if_required,
     validate_authentication_methods_dict_from_api,
-    validate_plan_for_authentication_methods,
 )
 from zerver.decorator import require_realm_admin, require_realm_owner
 from zerver.forms import check_subdomain_available as check_subdomain
@@ -53,7 +52,6 @@ from zerver.models.realms import (
     BotCreationPolicyEnum,
     CommonMessagePolicyEnum,
     CommonPolicyEnum,
-    CreateWebPublicStreamPolicyEnum,
     DigestWeekdayEnum,
     EditTopicPolicyEnum,
     InviteToRealmPolicyEnum,
@@ -115,6 +113,7 @@ def update_realm(
     inline_image_preview: Json[bool] | None = None,
     inline_url_embed_preview: Json[bool] | None = None,
     add_custom_emoji_policy: Json[CommonPolicyEnum] | None = None,
+    can_delete_any_message_group: Json[GroupSettingChangeRequest] | None = None,
     delete_own_message_policy: Json[CommonMessagePolicyEnum] | None = None,
     message_content_delete_limit_seconds_raw: Annotated[
         Json[int | str] | None,
@@ -144,9 +143,9 @@ def update_realm(
     bot_creation_policy: Json[BotCreationPolicyEnum] | None = None,
     can_create_public_channel_group: Json[GroupSettingChangeRequest] | None = None,
     can_create_private_channel_group: Json[GroupSettingChangeRequest] | None = None,
+    can_create_web_public_channel_group: Json[GroupSettingChangeRequest] | None = None,
     direct_message_initiator_group: Json[GroupSettingChangeRequest] | None = None,
     direct_message_permission_group: Json[GroupSettingChangeRequest] | None = None,
-    create_web_public_stream_policy: Json[CreateWebPublicStreamPolicyEnum] | None = None,
     invite_to_stream_policy: Json[CommonPolicyEnum] | None = None,
     move_messages_between_streams_policy: Json[MoveMessagesBetweenStreamsPolicyEnum] | None = None,
     user_group_edit_policy: Json[CommonPolicyEnum] | None = None,
@@ -200,7 +199,6 @@ def update_realm(
         validate_authentication_methods_dict_from_api(realm, authentication_methods)
         if True not in authentication_methods.values():
             raise JsonableError(_("At least one authentication method must be enabled."))
-        validate_plan_for_authentication_methods(realm, authentication_methods)
 
     if video_chat_provider is not None and video_chat_provider not in {
         p["id"] for p in Realm.VIDEO_CHAT_PROVIDERS.values()
@@ -340,7 +338,7 @@ def update_realm(
     #
     # TODO: It should be possible to deduplicate this function up
     # further by some more advanced usage of the
-    # `REQ/has_request_variables` extraction.
+    # `typed_endpoint` extraction.
     req_vars = {}
     req_group_setting_vars = {}
 

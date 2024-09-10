@@ -182,7 +182,9 @@ export function build_page() {
         can_create_multiuse_invite: settings_data.user_can_create_multiuse_invite(),
         can_invite_users_by_email: settings_data.user_can_invite_users_by_email(),
         realm_invite_required: realm.realm_invite_required,
+        can_create_user_groups: settings_data.user_can_create_user_groups(),
         policy_values: settings_config.common_policy_values,
+        realm_can_delete_any_message_group: realm.realm_can_delete_any_message_group,
         realm_delete_own_message_policy: realm.realm_delete_own_message_policy,
         DELETE_OWN_MESSAGE_POLICY_ADMINS_ONLY:
             settings_config.common_message_policy_values.by_admins_only.code,
@@ -211,8 +213,6 @@ export function build_page() {
         realm_name_in_email_notifications_policy_values:
             settings_config.realm_name_in_email_notifications_policy_values,
         twenty_four_hour_time_values: settings_config.twenty_four_hour_time_values,
-        create_web_public_stream_policy_values:
-            settings_config.create_web_public_stream_policy_values,
         disable_enable_spectator_access_setting:
             !realm.server_web_public_streams_enabled || !realm.zulip_plan_is_not_limited,
         realm_push_notifications_enabled: realm.realm_push_notifications_enabled,

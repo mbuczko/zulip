@@ -109,7 +109,7 @@ class NarrowParameter(BaseModel):
     @model_validator(mode="after")
     def validate_terms(self) -> "NarrowParameter":
         # Make sure to sync this list to frontend also when adding a new operator that
-        # supports integer IDs. Relevant code is located in web/src/message_fetch.js
+        # supports integer IDs. Relevant code is located in web/src/message_fetch.ts
         # in handle_operators_supporting_id_based_api function where you will need to
         # update operators_supporting_id, or operators_supporting_ids array.
         operators_supporting_id = [
@@ -594,6 +594,9 @@ class NarrowBuilder:
                     realm=self.realm,
                 )
 
+            if user_profiles == []:
+                return query.where(maybe_negate(false()))
+
             recipient = recipient_for_user_profiles(
                 user_profiles=user_profiles,
                 forwarded_mirror_message=False,
@@ -605,7 +608,7 @@ class NarrowBuilder:
         except (JsonableError, ValidationError):
             raise BadNarrowOperatorError("unknown user in " + str(operand))
         except DirectMessageGroup.DoesNotExist:
-            # Group DM where huddle doesn't exist
+            # Group DM where direct message group doesn't exist
             return query.where(maybe_negate(false()))
 
         # Group direct message

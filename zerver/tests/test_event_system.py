@@ -580,9 +580,11 @@ class GetEventsTest(ZulipTestCase):
 
             client = allocate_client_descriptor(queue_data)
 
-            try_update_realm_custom_profile_field(
-                realm=user_profile.realm, field=profile_field, name=new_name
-            )
+            with self.captureOnCommitCallbacks(execute=True):
+                try_update_realm_custom_profile_field(
+                    realm=user_profile.realm, field=profile_field, name=new_name
+                )
+
             result = self.tornado_call(
                 get_events,
                 user_profile,
@@ -1174,7 +1176,7 @@ class FetchQueriesTest(ZulipTestCase):
         realm = get_realm_with_settings(realm_id=user.realm_id)
 
         with (
-            self.assert_database_query_count(41),
+            self.assert_database_query_count(39),
             mock.patch("zerver.lib.events.always_want") as want_mock,
         ):
             fetch_initial_state_data(user, realm=realm)
@@ -1200,7 +1202,7 @@ class FetchQueriesTest(ZulipTestCase):
             realm_linkifiers=0,
             realm_playgrounds=1,
             realm_user=4,
-            realm_user_groups=5,
+            realm_user_groups=3,
             realm_user_settings_defaults=1,
             recent_private_conversations=1,
             scheduled_messages=1,

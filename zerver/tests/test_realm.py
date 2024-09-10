@@ -24,6 +24,7 @@ from zerver.actions.message_send import (
 )
 from zerver.actions.realm_settings import (
     do_add_deactivated_redirect,
+    do_change_realm_max_invites,
     do_change_realm_org_type,
     do_change_realm_permission_group_setting,
     do_change_realm_plan_type,
@@ -60,6 +61,7 @@ from zerver.models import (
     UserProfile,
 )
 from zerver.models.groups import SystemGroups
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.realms import (
     CommonMessagePolicyEnum,
     CommonPolicyEnum,
@@ -353,7 +355,7 @@ class RealmTest(ZulipTestCase):
         self.assertEqual(placeholder_realm.deactivated_redirect, user.realm.url)
 
         realm_audit_log = RealmAuditLog.objects.filter(
-            event_type=RealmAuditLog.REALM_SUBDOMAIN_CHANGED, acting_user=iago
+            event_type=AuditLogEventType.REALM_SUBDOMAIN_CHANGED, acting_user=iago
         ).last()
         assert realm_audit_log is not None
         expected_extra_data = {"old_subdomain": "zulip", "new_subdomain": "newzulip"}
@@ -436,7 +438,7 @@ class RealmTest(ZulipTestCase):
         assert log_entry is not None
 
         self.assertEqual(log_entry.realm, realm)
-        self.assertEqual(log_entry.event_type, RealmAuditLog.REALM_REACTIVATED)
+        self.assertEqual(log_entry.event_type, AuditLogEventType.REALM_REACTIVATED)
         log_entry_id = log_entry.id
 
         with self.assertLogs(level="WARNING") as m:
@@ -574,7 +576,7 @@ class RealmTest(ZulipTestCase):
         self.assertFalse(realm.deactivated)
         self.assertEqual(
             RealmAuditLog.objects.filter(
-                event_type=RealmAuditLog.REALM_REACTIVATION_EMAIL_SENT, acting_user=iago
+                event_type=AuditLogEventType.REALM_REACTIVATION_EMAIL_SENT, acting_user=iago
             ).count(),
             1,
         )
@@ -841,7 +843,6 @@ class RealmTest(ZulipTestCase):
 
         invalid_values = dict(
             bot_creation_policy=10,
-            create_web_public_stream_policy=10,
             invite_to_stream_policy=10,
             message_retention_days=10,
             video_chat_provider=10,
@@ -1005,7 +1006,7 @@ class RealmTest(ZulipTestCase):
         do_change_realm_org_type(realm, Realm.ORG_TYPES["government"]["id"], acting_user=iago)
         realm = get_realm("zulip")
         realm_audit_log = RealmAuditLog.objects.filter(
-            event_type=RealmAuditLog.REALM_ORG_TYPE_CHANGED
+            event_type=AuditLogEventType.REALM_ORG_TYPE_CHANGED
         ).last()
         assert realm_audit_log is not None
         expected_extra_data = {
@@ -1015,6 +1016,132 @@ class RealmTest(ZulipTestCase):
         self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
         self.assertEqual(realm_audit_log.acting_user, iago)
         self.assertEqual(realm.org_type, Realm.ORG_TYPES["government"]["id"])
+
+    def test_change_realm_max_invites(self) -> None:
+        realm = get_realm("zulip")
+        iago = self.example_user("iago")
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_SELF_HOSTED)
+        self.assertEqual(realm.max_invites, settings.INVITES_DEFAULT_REALM_DAILY_MAX)
+
+        do_change_realm_max_invites(realm, 1, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": settings.INVITES_DEFAULT_REALM_DAILY_MAX,
+            "new_value": 1,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_SELF_HOSTED)
+        self.assertEqual(realm.max_invites, 1)
+
+        do_change_realm_max_invites(realm, 0, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {"old_value": 1, "new_value": None, "property": "max_invites"}
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_SELF_HOSTED)
+        self.assertEqual(realm.max_invites, settings.INVITES_DEFAULT_REALM_DAILY_MAX)
+
+        realm.plan_type = Realm.PLAN_TYPE_PLUS
+        realm.save()
+
+        do_change_realm_max_invites(realm, 0, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": settings.INVITES_DEFAULT_REALM_DAILY_MAX,
+            "new_value": Realm.INVITES_STANDARD_REALM_DAILY_MAX,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_PLUS)
+        self.assertEqual(realm.max_invites, Realm.INVITES_STANDARD_REALM_DAILY_MAX)
+
+        realm.plan_type = Realm.PLAN_TYPE_LIMITED
+        realm.save()
+
+        do_change_realm_max_invites(realm, 0, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": Realm.INVITES_STANDARD_REALM_DAILY_MAX,
+            "new_value": settings.INVITES_DEFAULT_REALM_DAILY_MAX,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_LIMITED)
+        self.assertEqual(realm.max_invites, settings.INVITES_DEFAULT_REALM_DAILY_MAX)
+
+        realm.plan_type = Realm.PLAN_TYPE_STANDARD
+        realm.save()
+
+        do_change_realm_max_invites(realm, 0, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": settings.INVITES_DEFAULT_REALM_DAILY_MAX,
+            "new_value": Realm.INVITES_STANDARD_REALM_DAILY_MAX,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_STANDARD)
+        self.assertEqual(realm.max_invites, Realm.INVITES_STANDARD_REALM_DAILY_MAX)
+
+        realm.plan_type = Realm.PLAN_TYPE_STANDARD_FREE
+        realm.save()
+
+        do_change_realm_max_invites(realm, 50000, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": Realm.INVITES_STANDARD_REALM_DAILY_MAX,
+            "new_value": 50000,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_STANDARD_FREE)
+        self.assertEqual(realm.max_invites, 50000)
+
+        do_change_realm_max_invites(realm, 0, acting_user=iago)
+        realm = get_realm("zulip")
+        realm_audit_log = RealmAuditLog.objects.filter(
+            event_type=AuditLogEventType.REALM_PROPERTY_CHANGED
+        ).last()
+        assert realm_audit_log is not None
+        expected_extra_data = {
+            "old_value": 50000,
+            "new_value": Realm.INVITES_STANDARD_REALM_DAILY_MAX,
+            "property": "max_invites",
+        }
+        self.assertEqual(realm_audit_log.extra_data, expected_extra_data)
+        self.assertEqual(realm_audit_log.acting_user, iago)
+        self.assertEqual(realm.plan_type, Realm.PLAN_TYPE_STANDARD_FREE)
+        self.assertEqual(realm.max_invites, Realm.INVITES_STANDARD_REALM_DAILY_MAX)
 
     @skipUnless(settings.ZILENCER_ENABLED, "requires zilencer")
     def test_change_realm_plan_type(self) -> None:
@@ -1047,7 +1174,7 @@ class RealmTest(ZulipTestCase):
         do_change_realm_plan_type(realm, Realm.PLAN_TYPE_STANDARD, acting_user=iago)
         realm = get_realm("zulip")
         realm_audit_log = RealmAuditLog.objects.filter(
-            event_type=RealmAuditLog.REALM_PLAN_TYPE_CHANGED
+            event_type=AuditLogEventType.REALM_PLAN_TYPE_CHANGED
         ).last()
         assert realm_audit_log is not None
         expected_extra_data = {
@@ -1248,7 +1375,9 @@ class RealmTest(ZulipTestCase):
 
         self.assertTrue(
             RealmAuditLog.objects.filter(
-                realm=realm, event_type=RealmAuditLog.REALM_CREATED, event_time=realm.date_created
+                realm=realm,
+                event_type=AuditLogEventType.REALM_CREATED,
+                event_time=realm.date_created,
             ).exists()
         )
 
@@ -1294,7 +1423,9 @@ class RealmTest(ZulipTestCase):
 
         self.assertTrue(
             RealmAuditLog.objects.filter(
-                realm=realm, event_type=RealmAuditLog.REALM_CREATED, event_time=realm.date_created
+                realm=realm,
+                event_type=AuditLogEventType.REALM_CREATED,
+                event_time=realm.date_created,
             ).exists()
         )
 
@@ -1558,7 +1689,6 @@ class RealmAPITest(ZulipTestCase):
             message_retention_days=[10, 20],
             name=["Zulip", "New Name"],
             waiting_period_threshold=[10, 20],
-            create_web_public_stream_policy=Realm.CREATE_WEB_PUBLIC_STREAM_POLICY_TYPES,
             user_group_edit_policy=Realm.COMMON_POLICY_TYPES,
             invite_to_stream_policy=Realm.COMMON_POLICY_TYPES,
             wildcard_mention_policy=Realm.WILDCARD_MENTION_POLICY_TYPES,
@@ -1663,6 +1793,60 @@ class RealmAPITest(ZulipTestCase):
 
             realm = self.update_with_api(setting_name, value)
             self.assertEqual(getattr(realm, setting_name), user_group.usergroup_ptr)
+
+        if setting_permission_configuration.require_system_group:
+            leadership_group = NamedUserGroup.objects.get(name="leadership", realm=realm)
+
+            value = orjson.dumps(leadership_group.id).decode()
+            if setting_name in Realm.REALM_PERMISSION_GROUP_SETTINGS_WITH_NEW_API_FORMAT:
+                value = orjson.dumps(
+                    {
+                        "new": leadership_group.id,
+                    }
+                ).decode()
+
+            result = self.client_patch("/json/realm", {setting_name: value})
+            self.assert_json_error(result, f"'{setting_name}' must be a system user group.")
+
+            if setting_name in Realm.REALM_PERMISSION_GROUP_SETTINGS_WITH_NEW_API_FORMAT:
+                admins_group = NamedUserGroup.objects.get(
+                    name=SystemGroups.ADMINISTRATORS, realm=realm
+                )
+                moderators_group = NamedUserGroup.objects.get(
+                    name=SystemGroups.MODERATORS, realm=realm
+                )
+                value = orjson.dumps(
+                    {
+                        "new": {
+                            "direct_members": [],
+                            "direct_subgroups": [admins_group.id, leadership_group.id],
+                        }
+                    }
+                ).decode()
+                result = self.client_patch("/json/realm", {setting_name: value})
+                self.assert_json_error(result, f"'{setting_name}' must be a system user group.")
+
+                value = orjson.dumps(
+                    {
+                        "new": {
+                            "direct_members": [],
+                            "direct_subgroups": [admins_group.id, moderators_group.id],
+                        }
+                    }
+                ).decode()
+                result = self.client_patch("/json/realm", {setting_name: value})
+                self.assert_json_error(result, f"'{setting_name}' must be a system user group.")
+
+                value = orjson.dumps(
+                    {
+                        "new": {
+                            "direct_members": [],
+                            "direct_subgroups": [admins_group.id],
+                        }
+                    }
+                ).decode()
+                realm = self.update_with_api(setting_name, value)
+                self.assertEqual(getattr(realm, setting_name), admins_group.usergroup_ptr)
 
     def do_test_realm_permission_group_setting_update_api_with_anonymous_groups(
         self, setting_name: str
@@ -1897,14 +2081,18 @@ class RealmAPITest(ZulipTestCase):
                 with self.subTest(property=prop):
                     self.do_test_realm_update_api(prop)
 
+        check_add_user_group(
+            get_realm("zulip"), "leadership", [self.example_user("hamlet")], acting_user=None
+        )
         for prop in Realm.REALM_PERMISSION_GROUP_SETTINGS:
             with self.subTest(property=prop):
                 self.do_test_realm_permission_group_setting_update_api(prop)
 
-        check_add_user_group(
-            get_realm("zulip"), "leadership", [self.example_user("hamlet")], acting_user=None
-        )
         for prop in Realm.REALM_PERMISSION_GROUP_SETTINGS_WITH_NEW_API_FORMAT:
+            if Realm.REALM_PERMISSION_GROUP_SETTINGS[prop].require_system_group:
+                # Anonymous system groups aren't relevant when
+                # restricted to system groups.
+                continue
             with self.subTest(property=prop):
                 self.do_test_realm_permission_group_setting_update_api_with_anonymous_groups(prop)
 
@@ -2280,7 +2468,7 @@ class ScrubRealmTest(ZulipTestCase):
         path_ids = []
         for n in range(1, 4):
             content = f"content{n}".encode()
-            url = upload_message_attachment(f"dummy{n}.txt", "text/plain", content, hamlet)
+            url = upload_message_attachment(f"dummy{n}.txt", "text/plain", content, hamlet)[0]
             base = "/user_uploads/"
             self.assertEqual(base, url[: len(base)])
             path_id = re.sub(r"/user_uploads/", "", url)
@@ -2355,7 +2543,7 @@ class ScrubRealmTest(ZulipTestCase):
         file_paths = []
         for n, owner in enumerate([iago, othello, hamlet, cordelia, king]):
             content = f"content{n}".encode()
-            url = upload_message_attachment(f"dummy{n}.txt", "text/plain", content, owner)
+            url = upload_message_attachment(f"dummy{n}.txt", "text/plain", content, owner)[0]
             base = "/user_uploads/"
             self.assertEqual(base, url[: len(base)])
             file_path = os.path.join(settings.LOCAL_FILES_DIR, re.sub(r"/user_uploads/", "", url))

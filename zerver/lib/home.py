@@ -8,7 +8,7 @@ from django.utils import translation
 from two_factor.utils import default_device
 
 from zerver.context_processors import get_apps_page_url
-from zerver.lib.events import do_events_register
+from zerver.lib.events import ClientCapabilities, do_events_register
 from zerver.lib.i18n import (
     get_and_set_request_language,
     get_language_list,
@@ -140,22 +140,22 @@ def build_page_params_for_home_page_load(
     narrow: list[NarrowTerm],
     narrow_stream: Stream | None,
     narrow_topic_name: str | None,
-    needs_tutorial: bool,
 ) -> tuple[int, dict[str, object]]:
     """
     This function computes page_params for when we load the home page.
 
     The page_params data structure gets sent to the client.
     """
-    client_capabilities = {
-        "notification_settings_null": True,
-        "bulk_message_deletion": True,
-        "user_avatar_url_field_optional": True,
-        "stream_typing_notifications": True,
-        "user_settings_object": True,
-        "linkifier_url_template": True,
-        "user_list_incomplete": True,
-    }
+
+    client_capabilities = ClientCapabilities(
+        notification_settings_null=True,
+        bulk_message_deletion=True,
+        user_avatar_url_field_optional=True,
+        stream_typing_notifications=True,
+        user_settings_object=True,
+        linkifier_url_template=True,
+        user_list_incomplete=True,
+    )
 
     if user_profile is not None:
         client = RequestNotes.get_notes(request).client
@@ -210,7 +210,6 @@ def build_page_params_for_home_page_load(
         corporate_enabled=settings.CORPORATE_ENABLED,
         ## Misc. extra data.
         language_list=get_language_list(),
-        needs_tutorial=needs_tutorial,
         furthest_read_time=furthest_read_time,
         bot_types=get_bot_types(user_profile),
         two_fa_enabled=two_fa_enabled,

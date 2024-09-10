@@ -78,6 +78,7 @@ from zerver.models import (
 from zerver.models.clients import get_client
 from zerver.models.groups import SystemGroups
 from zerver.models.messages import Attachment
+from zerver.models.realm_audit_logs import AuditLogEventType
 from zerver.models.scheduled_jobs import NotificationTriggers
 from zerver.models.users import get_user, is_cross_realm_bot_email
 from zilencer.models import (
@@ -151,7 +152,7 @@ class AnalyticsTestCase(ZulipTestCase):
                     realm=kwargs["realm"],
                     acting_user=None,
                     modified_user=user,
-                    event_type=RealmAuditLog.USER_CREATED,
+                    event_type=AuditLogEventType.USER_CREATED,
                     event_time=kwargs["date_joined"],
                     extra_data={
                         RealmAuditLog.ROLE_COUNT: realm_user_count_by_role(kwargs["realm"])
@@ -175,16 +176,20 @@ class AnalyticsTestCase(ZulipTestCase):
         stream.save(update_fields=["recipient"])
         return stream, recipient
 
-    def create_huddle_with_recipient(self, **kwargs: Any) -> tuple[DirectMessageGroup, Recipient]:
+    def create_direct_message_group_with_recipient(
+        self, **kwargs: Any
+    ) -> tuple[DirectMessageGroup, Recipient]:
         self.name_counter += 1
-        defaults = {"huddle_hash": f"hash{self.name_counter}"}
+        defaults = {"huddle_hash": f"hash{self.name_counter}", "group_size": 4}
         for key, value in defaults.items():
             kwargs[key] = kwargs.get(key, value)
-        huddle = DirectMessageGroup.objects.create(**kwargs)
-        recipient = Recipient.objects.create(type_id=huddle.id, type=Recipient.DIRECT_MESSAGE_GROUP)
-        huddle.recipient = recipient
-        huddle.save(update_fields=["recipient"])
-        return huddle, recipient
+        direct_message_group = DirectMessageGroup.objects.create(**kwargs)
+        recipient = Recipient.objects.create(
+            type_id=direct_message_group.id, type=Recipient.DIRECT_MESSAGE_GROUP
+        )
+        direct_message_group.recipient = recipient
+        direct_message_group.save(update_fields=["recipient"])
+        return direct_message_group, recipient
 
     def create_message(self, sender: UserProfile, recipient: Recipient, **kwargs: Any) -> Message:
         defaults = {
@@ -547,8 +552,8 @@ class TestCountStats(AnalyticsTestCase):
 
         self.create_user(realm=self.no_message_realm)
         self.create_stream_with_recipient(realm=self.no_message_realm)
-        # This huddle should not show up anywhere
-        self.create_huddle_with_recipient()
+        # This direct_message_group should not show up anywhere
+        self.create_direct_message_group_with_recipient()
 
     def test_upload_quota_used_bytes(self) -> None:
         stat = COUNT_STATS["upload_quota_used_bytes::day"]
@@ -595,11 +600,11 @@ class TestCountStats(AnalyticsTestCase):
         recipient_human1 = Recipient.objects.get(type_id=human1.id, type=Recipient.PERSONAL)
 
         recipient_stream = self.create_stream_with_recipient()[1]
-        recipient_huddle = self.create_huddle_with_recipient()[1]
+        recipient_direct_message_group = self.create_direct_message_group_with_recipient()[1]
 
         self.create_message(bot, recipient_human1)
         self.create_message(bot, recipient_stream)
-        self.create_message(bot, recipient_huddle)
+        self.create_message(bot, recipient_direct_message_group)
         self.create_message(human1, recipient_human1)
         self.create_message(human2, recipient_human1)
 
@@ -636,19 +641,19 @@ class TestCountStats(AnalyticsTestCase):
         recipient_human1 = Recipient.objects.get(type_id=human1.id, type=Recipient.PERSONAL)
 
         recipient_stream = self.create_stream_with_recipient()[1]
-        recipient_huddle = self.create_huddle_with_recipient()[1]
+        recipient_direct_message_group = self.create_direct_message_group_with_recipient()[1]
 
         # To be included
         self.create_message(bot, recipient_human1)
         self.create_message(bot, recipient_stream)
-        self.create_message(bot, recipient_huddle)
+        self.create_message(bot, recipient_direct_message_group)
         self.create_message(human1, recipient_human1)
         self.create_message(human2, recipient_human1)
 
         # To be excluded
         self.create_message(self.hourly_user, recipient_human1)
         self.create_message(self.hourly_user, recipient_stream)
-        self.create_message(self.hourly_user, recipient_huddle)
+        self.create_message(self.hourly_user, recipient_direct_message_group)
 
         do_fill_count_stat_at_hour(stat, self.TIME_ZERO, self.default_realm)
 
@@ -692,11 +697,11 @@ class TestCountStats(AnalyticsTestCase):
         self.create_message(user1, recipient_stream4)
         self.create_message(user2, recipient_stream3)
 
-        # huddles
-        recipient_huddle1 = self.create_huddle_with_recipient()[1]
-        recipient_huddle2 = self.create_huddle_with_recipient()[1]
-        self.create_message(user1, recipient_huddle1)
-        self.create_message(user2, recipient_huddle2)
+        # direct message groups
+        recipient_direct_message_group1 = self.create_direct_message_group_with_recipient()[1]
+        recipient_direct_message_group2 = self.create_direct_message_group_with_recipient()[1]
+        self.create_message(user1, recipient_direct_message_group1)
+        self.create_message(user2, recipient_direct_message_group2)
 
         # direct messages
         recipient_user1 = Recipient.objects.get(type_id=user1.id, type=Recipient.PERSONAL)
@@ -759,13 +764,13 @@ class TestCountStats(AnalyticsTestCase):
         user_recipient = Recipient.objects.get(type_id=user.id, type=Recipient.PERSONAL)
         private_stream_recipient = self.create_stream_with_recipient(invite_only=True)[1]
         stream_recipient = self.create_stream_with_recipient()[1]
-        huddle_recipient = self.create_huddle_with_recipient()[1]
+        direct_message_group_recipient = self.create_direct_message_group_with_recipient()[1]
 
         # To be included
         self.create_message(user, user_recipient)
         self.create_message(user, private_stream_recipient)
         self.create_message(user, stream_recipient)
-        self.create_message(user, huddle_recipient)
+        self.create_message(user, direct_message_group_recipient)
 
         do_fill_count_stat_at_hour(stat, self.TIME_ZERO, self.default_realm)
 
@@ -773,7 +778,7 @@ class TestCountStats(AnalyticsTestCase):
         self.create_message(self.hourly_user, user_recipient)
         self.create_message(self.hourly_user, private_stream_recipient)
         self.create_message(self.hourly_user, stream_recipient)
-        self.create_message(self.hourly_user, huddle_recipient)
+        self.create_message(self.hourly_user, direct_message_group_recipient)
 
         self.assertTableState(
             UserCount,
@@ -806,11 +811,11 @@ class TestCountStats(AnalyticsTestCase):
         user = self.create_user(id=1000)
         user_recipient = Recipient.objects.get(type_id=user.id, type=Recipient.PERSONAL)
         stream_recipient = self.create_stream_with_recipient(id=1000)[1]
-        huddle_recipient = self.create_huddle_with_recipient(id=1000)[1]
+        direct_message_group_recipient = self.create_direct_message_group_with_recipient(id=1000)[1]
 
         self.create_message(user, user_recipient)
         self.create_message(user, stream_recipient)
-        self.create_message(user, huddle_recipient)
+        self.create_message(user, direct_message_group_recipient)
 
         do_fill_count_stat_at_hour(stat, self.TIME_ZERO)
 
@@ -827,13 +832,13 @@ class TestCountStats(AnalyticsTestCase):
         recipient_user2 = Recipient.objects.get(type_id=user2.id, type=Recipient.PERSONAL)
 
         recipient_stream = self.create_stream_with_recipient()[1]
-        recipient_huddle = self.create_huddle_with_recipient()[1]
+        recipient_direct_message_group = self.create_direct_message_group_with_recipient()[1]
 
         client2 = Client.objects.create(name="client2")
 
         self.create_message(user1, recipient_user2, sending_client=client2)
         self.create_message(user1, recipient_stream)
-        self.create_message(user1, recipient_huddle)
+        self.create_message(user1, recipient_direct_message_group)
         self.create_message(user2, recipient_user2, sending_client=client2)
         self.create_message(user2, recipient_user2, sending_client=client2)
 
@@ -923,8 +928,8 @@ class TestCountStats(AnalyticsTestCase):
         # To be excluded
         self.create_message(human2, recipient_human1)
         self.create_message(bot, recipient_human1)
-        recipient_huddle = self.create_huddle_with_recipient()[1]
-        self.create_message(human1, recipient_huddle)
+        recipient_direct_message_group = self.create_direct_message_group_with_recipient()[1]
+        self.create_message(human1, recipient_direct_message_group)
 
         do_fill_count_stat_at_hour(stat, self.TIME_ZERO)
 
@@ -1838,50 +1843,50 @@ class TestActiveUsersAudit(AnalyticsTestCase):
         )
 
     def test_user_deactivated_in_future(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 1)
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 0)
+        self.add_event(AuditLogEventType.USER_CREATED, 1)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 0)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["subgroup"], [["false"]])
 
     def test_user_reactivated_in_future(self) -> None:
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 1)
-        self.add_event(RealmAuditLog.USER_REACTIVATED, 0)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_REACTIVATED, 0)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, [], [])
 
     def test_user_active_then_deactivated_same_day(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 1)
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 0.5)
+        self.add_event(AuditLogEventType.USER_CREATED, 1)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 0.5)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, [], [])
 
     def test_user_unactive_then_activated_same_day(self) -> None:
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 1)
-        self.add_event(RealmAuditLog.USER_REACTIVATED, 0.5)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_REACTIVATED, 0.5)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["subgroup"], [["false"]])
 
     # Arguably these next two tests are duplicates of the _in_future tests, but are
     # a guard against future refactorings where they may no longer be duplicates
     def test_user_active_then_deactivated_with_day_gap(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 2)
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_CREATED, 2)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 1)
         process_count_stat(self.stat, self.TIME_ZERO)
         self.assertTableState(
             RealmCount, ["subgroup", "end_time"], [["false", self.TIME_ZERO - self.DAY]]
         )
 
     def test_user_deactivated_then_reactivated_with_day_gap(self) -> None:
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 2)
-        self.add_event(RealmAuditLog.USER_REACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 2)
+        self.add_event(AuditLogEventType.USER_REACTIVATED, 1)
         process_count_stat(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["subgroup"], [["false"]])
 
     def test_event_types(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 4)
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 3)
-        self.add_event(RealmAuditLog.USER_ACTIVATED, 2)
-        self.add_event(RealmAuditLog.USER_REACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_CREATED, 4)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 3)
+        self.add_event(AuditLogEventType.USER_ACTIVATED, 2)
+        self.add_event(AuditLogEventType.USER_REACTIVATED, 1)
         for i in range(4):
             do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO - i * self.DAY)
         self.assertTableState(
@@ -1899,7 +1904,7 @@ class TestActiveUsersAudit(AnalyticsTestCase):
         user3 = self.create_user(skip_auditlog=True, realm=second_realm)
         user4 = self.create_user(skip_auditlog=True, realm=second_realm, is_bot=True)
         for user in [user1, user2, user3, user4]:
-            self.add_event(RealmAuditLog.USER_CREATED, 1, user=user)
+            self.add_event(AuditLogEventType.USER_CREATED, 1, user=user)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(
             RealmCount,
@@ -1921,7 +1926,7 @@ class TestActiveUsersAudit(AnalyticsTestCase):
     # CountStat.HOUR from CountStat.DAY, this will fail, while many of the
     # tests above will not.
     def test_update_from_two_days_ago(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 2)
+        self.add_event(AuditLogEventType.USER_CREATED, 2)
         process_count_stat(self.stat, self.TIME_ZERO)
         self.assertTableState(
             RealmCount,
@@ -1933,22 +1938,22 @@ class TestActiveUsersAudit(AnalyticsTestCase):
     # doesn't go through do_create_user. Mainly just want to make sure that
     # that situation doesn't throw an error.
     def test_empty_realm_or_user_with_no_relevant_activity(self) -> None:
-        self.add_event(RealmAuditLog.USER_SOFT_ACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_SOFT_ACTIVATED, 1)
         self.create_user(skip_auditlog=True)  # also test a user with no RealmAuditLog entries
         do_create_realm(string_id="moo", name="moo")
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, [], [])
 
     def test_max_audit_entry_is_unrelated(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 1)
-        self.add_event(RealmAuditLog.USER_SOFT_ACTIVATED, 0.5)
+        self.add_event(AuditLogEventType.USER_CREATED, 1)
+        self.add_event(AuditLogEventType.USER_SOFT_ACTIVATED, 0.5)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["subgroup"], [["false"]])
 
     # Simultaneous related audit entries should not be allowed, and so not testing for that.
     def test_simultaneous_unrelated_audit_entry(self) -> None:
-        self.add_event(RealmAuditLog.USER_CREATED, 1)
-        self.add_event(RealmAuditLog.USER_SOFT_ACTIVATED, 1)
+        self.add_event(AuditLogEventType.USER_CREATED, 1)
+        self.add_event(AuditLogEventType.USER_SOFT_ACTIVATED, 1)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["subgroup"], [["false"]])
 
@@ -1956,10 +1961,10 @@ class TestActiveUsersAudit(AnalyticsTestCase):
         user1 = self.create_user(skip_auditlog=True)
         user2 = self.create_user(skip_auditlog=True)
         user3 = self.create_user(skip_auditlog=True)
-        self.add_event(RealmAuditLog.USER_CREATED, 0.5, user=user1)
-        self.add_event(RealmAuditLog.USER_CREATED, 0.5, user=user2)
-        self.add_event(RealmAuditLog.USER_CREATED, 1, user=user3)
-        self.add_event(RealmAuditLog.USER_DEACTIVATED, 0.5, user=user3)
+        self.add_event(AuditLogEventType.USER_CREATED, 0.5, user=user1)
+        self.add_event(AuditLogEventType.USER_CREATED, 0.5, user=user2)
+        self.add_event(AuditLogEventType.USER_CREATED, 1, user=user3)
+        self.add_event(AuditLogEventType.USER_DEACTIVATED, 0.5, user=user3)
         do_fill_count_stat_at_hour(self.stat, self.TIME_ZERO)
         self.assertTableState(RealmCount, ["value", "subgroup"], [[2, "false"]])
 

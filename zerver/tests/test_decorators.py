@@ -1034,7 +1034,7 @@ class TestInternalNotifyView(ZulipTestCase):
         )
 
         with self.settings(SHARED_SECRET=secret):
-            self.assertTrue(authenticate_internal_api(request))
+            self.assertTrue(authenticate_internal_api(request, secret=secret))
             self.assertEqual(
                 orjson.loads(self.internal_notify(False, request).content).get("msg"),
                 self.BORING_RESULT,
@@ -1050,7 +1050,7 @@ class TestInternalNotifyView(ZulipTestCase):
             tornado_handler=dummy_handler,
         )
         with self.settings(SHARED_SECRET=secret):
-            self.assertTrue(authenticate_internal_api(request))
+            self.assertTrue(authenticate_internal_api(request, secret=secret))
             self.assertEqual(
                 orjson.loads(self.internal_notify(True, request).content).get("msg"),
                 self.BORING_RESULT,
@@ -1083,7 +1083,7 @@ class TestInternalNotifyView(ZulipTestCase):
         )
 
         with self.settings(SHARED_SECRET="broken"):
-            self.assertFalse(authenticate_internal_api(request))
+            self.assertFalse(authenticate_internal_api(request, secret=secret))
             with self.assertRaises(AccessDeniedError) as access_denied_error:
                 self.internal_notify(True, request)
             self.assertEqual(access_denied_error.exception.http_status_code, 403)
@@ -1096,7 +1096,7 @@ class TestInternalNotifyView(ZulipTestCase):
         )
 
         with self.settings(SHARED_SECRET=secret):
-            self.assertFalse(authenticate_internal_api(request))
+            self.assertFalse(authenticate_internal_api(request, secret=secret))
             with self.assertRaises(AccessDeniedError) as context:
                 self.internal_notify(True, request)
             self.assertEqual(context.exception.http_status_code, 403)
@@ -1116,7 +1116,6 @@ class TestHumanUsersOnlyDecorator(ZulipTestCase):
             "/api/v1/users/me/android_gcm_reg_id",
             "/api/v1/users/me/onboarding_steps",
             "/api/v1/users/me/presence",
-            "/api/v1/users/me/tutorial_status",
         ]
         for endpoint in post_endpoints:
             result = self.api_post(default_bot, endpoint)

@@ -119,6 +119,7 @@ js_rules = RuleList(
                 "web/src/message_store.ts",
                 "web/src/types.ts",
                 "web/src/util.ts",
+                "web/src/message_events_util.ts",
                 "web/src/message_helper.ts",
                 "web/src/server_message.ts",
                 "web/tests/",
@@ -352,10 +353,6 @@ python_rules = RuleList(
             "pattern": r"""\WJsonableError\(["'].+\)""",
             "exclude": {"zerver/tests", "zerver/views/development/"},
             "description": "Argument to JsonableError should be a literal string enclosed by _()",
-        },
-        {
-            "pattern": r"""([a-zA-Z0-9_]+)=REQ\(['"]\1['"]""",
-            "description": "REQ's first argument already defaults to parameter name",
         },
         {
             "pattern": r"self\.client\.(get|post|patch|put|delete)",

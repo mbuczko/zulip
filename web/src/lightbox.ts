@@ -118,12 +118,12 @@ export class PanZoomControl {
         // See https://github.com/anvaka/panzoom/issues/112 for upstream discussion.
 
         const {scale, x, y} = e.getTransform();
-        const image_width = $(".zoom-element > img")[0]!.clientWidth * scale;
-        const image_height = $(".zoom-element > img")[0]!.clientHeight * scale;
-        const zoom_element_width = $(".zoom-element")[0]!.clientWidth * scale;
-        const zoom_element_height = $(".zoom-element")[0]!.clientHeight * scale;
-        const max_translate_x = $(".image-preview")[0]!.clientWidth;
-        const max_translate_y = $(".image-preview")[0]!.clientHeight;
+        const image_width = util.the($(".zoom-element > img")).clientWidth * scale;
+        const image_height = util.the($(".zoom-element > img")).clientHeight * scale;
+        const zoom_element_width = util.the($(".zoom-element")).clientWidth * scale;
+        const zoom_element_height = util.the($(".zoom-element")).clientHeight * scale;
+        const max_translate_x = util.the($(".image-preview")).clientWidth;
+        const max_translate_y = util.the($(".image-preview")).clientHeight;
 
         // When the image is dragged out of the image-preview container
         // (max_translate) it will be "snapped" back so that the number
@@ -204,7 +204,7 @@ export function clear_for_testing(): void {
     asset_map.clear();
 }
 
-export function canonical_url_of_media(media: HTMLMediaElement): string {
+export function canonical_url_of_media(media: HTMLMediaElement | HTMLImageElement): string {
     let media_string = media.src;
     if (!media_string) {
         return "";
@@ -225,7 +225,7 @@ export function canonical_url_of_media(media: HTMLMediaElement): string {
 
 export function render_lightbox_media_list(displayed_source: string): void {
     if (!is_open) {
-        const message_media_list = $<HTMLMediaElement>(
+        const message_media_list = $<HTMLMediaElement | HTMLImageElement>(
             ".focused-message-list .message_inline_image img, .focused-message-list .message_inline_video video",
         ).toArray();
         const $lightbox_media_list = $("#lightbox_overlay .image-list").empty();
@@ -251,7 +251,6 @@ export function render_lightbox_media_list(displayed_source: string): void {
 
                 const $video = $("<video>");
                 $video.attr("src", payload.source);
-                $video.attr("controls", "false");
 
                 $node.append($video);
             } else {
@@ -382,7 +381,7 @@ function display_video(payload: Payload): void {
 
 export function build_open_media_function(
     on_close: (() => void) | undefined,
-): ($media: JQuery<HTMLMediaElement>) => void {
+): ($media: JQuery<HTMLMediaElement | HTMLImageElement>) => void {
     if (on_close === undefined) {
         on_close = function () {
             remove_video_players();
@@ -392,13 +391,13 @@ export function build_open_media_function(
         };
     }
 
-    return function ($media: JQuery<HTMLMediaElement>): void {
+    return function ($media: JQuery<HTMLMediaElement | HTMLImageElement>): void {
         // This is used both for clicking on media in the messagelist, as well as clicking on images
         // in the media list under the lightbox when it is open.
-        const payload = parse_media_data($media[0]!);
+        const payload = parse_media_data(util.the($media));
 
         assert(payload !== undefined);
-        if (payload.type.match("-video")) {
+        if (payload.type.includes("-video")) {
             display_video(payload);
         } else if (payload.type === "image") {
             display_image(payload);
@@ -424,9 +423,8 @@ export function show_from_selected_message(): void {
     const $message_selected = $(".selected_message");
     let $message = $message_selected;
     // This is a function to satisfy eslint unicorn/no-array-callback-reference
-    const media_classes: () => string = () =>
-        ".message_inline_image img, .message_inline_image video";
-    let $media = $message.find<HTMLMediaElement>(media_classes());
+    const media_classes = (): string => ".message_inline_image img, .message_inline_image video";
+    let $media = $message.find<HTMLMediaElement | HTMLImageElement>(media_classes());
     let $prev_traverse = false;
 
     // First, we walk upwards/backwards, starting with the current
@@ -444,12 +442,12 @@ export function show_from_selected_message(): void {
                 break;
             } else {
                 $message = rows.last_message_in_group($prev_message_group);
-                $media = $message.find<HTMLMediaElement>(media_classes());
+                $media = $message.find<HTMLMediaElement | HTMLImageElement>(media_classes());
                 continue;
             }
         }
         $message = $message.prev();
-        $media = $message.find<HTMLMediaElement>(media_classes());
+        $media = $message.find<HTMLMediaElement | HTMLImageElement>(media_classes());
     }
 
     if ($prev_traverse) {
@@ -460,12 +458,12 @@ export function show_from_selected_message(): void {
                     break;
                 } else {
                     $message = rows.first_message_in_group($next_message_group);
-                    $media = $message.find<HTMLMediaElement>(media_classes());
+                    $media = $message.find<HTMLMediaElement | HTMLImageElement>(media_classes());
                     continue;
                 }
             }
             $message = $message.next();
-            $media = $message.find<HTMLMediaElement>(media_classes());
+            $media = $message.find<HTMLMediaElement | HTMLImageElement>(media_classes());
         }
     }
 
@@ -476,7 +474,7 @@ export function show_from_selected_message(): void {
 }
 
 // retrieve the metadata from the DOM and store into the asset_map.
-export function parse_media_data(media: HTMLMediaElement): Payload {
+export function parse_media_data(media: HTMLMediaElement | HTMLImageElement): Payload {
     const canonical_url = canonical_url_of_media(media);
     if (asset_map.has(canonical_url)) {
         // Use the cached value
@@ -511,7 +509,7 @@ export function parse_media_data(media: HTMLMediaElement): Payload {
     let original_width_px;
     let original_height_px;
     if (original_dimensions) {
-        const found = original_dimensions.match(/^(\d+)x(\d+)$/);
+        const found = /^(\d+)x(\d+)$/.exec(original_dimensions);
         if (found) {
             original_width_px = Number(found[1]);
             original_height_px = Number(found[2]);
@@ -599,7 +597,7 @@ export function initialize(): void {
 
     // Bind the pan/zoom control the newly created element.
     const pan_zoom_control = new PanZoomControl(
-        $("#lightbox_overlay .image-preview > .zoom-element")[0]!,
+        util.the($("#lightbox_overlay .image-preview > .zoom-element")),
     );
 
     const reset_lightbox_state = function (): void {
@@ -623,7 +621,7 @@ export function initialize(): void {
             e.preventDefault();
             // prevent the message compose dialog from happening.
             e.stopPropagation();
-            const $img = $(this).find<HTMLMediaElement>("img");
+            const $img = $(this).find<HTMLImageElement>("img");
             open_image($img);
         },
     );
@@ -649,7 +647,7 @@ export function initialize(): void {
                 `.message_row a[href='${CSS.escape($(this).attr("data-url")!)}'] video`,
             );
         } else {
-            $original_media_element = $<HTMLMediaElement>(
+            $original_media_element = $<HTMLImageElement>(
                 `.message_row a[href='${CSS.escape($(this).attr("data-url")!)}'] img`,
             );
         }
@@ -696,8 +694,6 @@ export function initialize(): void {
 
     $("#lightbox_overlay").on("click", ".lightbox-zoom-reset", () => {
         if (!$("#lightbox_overlay .lightbox-zoom-reset").hasClass("disabled")) {
-            const $img = $("#lightbox_overlay").find<HTMLMediaElement>(".image-preview img");
-            open_image($img);
             pan_zoom_control.reset();
         }
     });
